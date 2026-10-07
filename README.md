@@ -71,8 +71,9 @@ aws cloudformation describe-stack-events \
 After setting up the namespace Secrets, package again and enable application installation:
 
 ```sh
-aws cloudformation package --template-file main.yml --s3-bucket spendsmart-cfn-packages-047078339928-us-east-1 --output-template-file packaged.yml --region us-east-1 && aws cloudformation validate-template --template-body file://packaged.yml --region us-east-1 aws cloudformation package --template-file main.yml --s3-bucket spendsmart-cfn-packages --output-template-
-file packaged.yml --region us-east-1 && aws cloudformation validate-template --template-body file://packaged.yml --region us-east-1
+aws cloudformation package --template-file main.yml --s3-bucket spendsmart-cfn-packages --output-template-file packaged.yml --region us-east-1 && aws cloudformation validate-template --template-body packaged.yml --region us-east-1 
+
+aws cloudformation package --template-file main.yml --s3-bucket spendsmart-cfn-packages --output-template-file packaged.yml --region us-east-1 && aws cloudformation validate-template --template-body file://packaged.yml --region us-east-1
 
 
 aws cloudformation deploy \

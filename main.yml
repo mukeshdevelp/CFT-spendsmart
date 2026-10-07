@@ -36,12 +36,12 @@ Parameters:
 
   AvailabilityZone1:
     Type: String
-    Default: ''
+    Default: 'us-east-1a'
     Description: Optional AZ override. Empty selects the first available AZ.
 
   AvailabilityZone2:
     Type: String
-    Default: ''
+    Default: 'us-east-1b'
     Description: Optional AZ override. Empty selects the second available AZ.
 
   EnableNatGateway:
@@ -178,11 +178,7 @@ Parameters:
     AllowedValues: [ON_DEMAND]
     Default: ON_DEMAND
 
-  EksNodesEgressCidr:
-    Type: String
-    Default: 0.0.0.0/0
-    Description: Allows node bootstrap and the Load Balancer Controller to reach AWS APIs through NAT; narrow with VPC endpoints if desired.
-
+  
   S3BucketName:
     Type: String
     Default: athena-results-spendsmart-dev
@@ -388,6 +384,14 @@ Parameters:
   BastionMetadataHopLimit:
     Type: Number
     Default: 2
+  BastionKubectlVersion:
+    Type: String
+    Default: '1.36.2'
+    Description: kubectl version installed on the bastion.
+
+  BastionEKSAccessPolicyArn:
+    Type: String
+    Default: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
 
   BastionRootVolumeEncrypted:
     Type: String
@@ -588,16 +592,6 @@ Parameters:
     Type: String
     Default: Analytics, cost, AWS infrastructure and service metadata access
 
-  EksNodeAmiSsmParameter:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/eks/optimized-ami/1.36/amazon-linux-2023/x86_64/standard/recommended/image_id
-    Description: EKS-optimized AL2023 AMI. The version in the path must match EksClusterVersion.
-  
-  EksServiceCidr:
-    Type: String
-    Default: 172.20.0.0/16
-    Description: Cluster service CIDR (EKS default for a 10.x VPC).
-
   SpendSmartWorkloadMode:
     Type: String
     AllowedValues: [InstallNew, LeaveExisting]
@@ -684,7 +678,7 @@ Conditions:
   AthenaEnforceConfiguration: !Equals [!Ref AthenaEnforceWorkgroupConfiguration, 'true']
   AthenaPublishMetrics: !Equals [!Ref AthenaPublishCloudWatchMetrics, 'true']
 
-# resources section
+# Resources Section
 Resources:
   GeneratedEc2KeyPair:
     Type: AWS::EC2::KeyPair
@@ -699,16 +693,16 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # Network Stack
   Network:
     Type: AWS::CloudFormation::Stack
     Condition: CreateNewEksCluster
-    #Condition: CreateNewEksCluster
     Properties:
       TemplateURL: ./modules/network-skeleton/template.yaml
       Parameters:
         ProjectName: !Ref ProjectName
-        NamePrefix: !Ref NamePrefix
-        Environment: !Ref Environment
+        NamePrefix: !Ref ProjectName
+        Environment: "dev"
         VpcCidr: !Ref VpcCidr
         PublicSubnet1Cidr: !Ref PublicSubnet1Cidr
         PublicSubnet2Cidr: !Ref PublicSubnet2Cidr
@@ -716,7 +710,7 @@ Resources:
         PrivateSubnet2Cidr: !Ref PrivateSubnet2Cidr
         AvailabilityZone1: !Ref AvailabilityZone1
         AvailabilityZone2: !Ref AvailabilityZone2
-        EnableNatGateway: !Ref EnableNatGateway
+        EnableNatGateway: "true"
         EksClusterName: !Ref EksClusterName
         EnableDnsHostnames: !Ref EnableDnsHostnames
         EnableDnsSupport: !Ref EnableDnsSupport
@@ -734,11 +728,10 @@ Resources:
         PrivateSubnetTierTag: !Ref PrivateSubnetTierTag
         AlbSubnetRoleTag: !Ref AlbSubnetRoleTag
         ClusterSubnetTagValue: !Ref ClusterSubnetTagValue
-
+  # Bastion Stack
   Bastion:
     Type: AWS::CloudFormation::Stack
     Condition: CreateBastion
-    #Condition: CreateBastion
     Properties:
       TemplateURL: ./modules/bastion/template.yaml
       Parameters:
@@ -767,9 +760,45 @@ Resources:
         BastionRootVolumeEncrypted: !Ref BastionRootVolumeEncrypted
         BastionRootVolumeDeleteOnTermination: !Ref BastionRootVolumeDeleteOnTermination
         EksNodesSshIngressDescription: !Ref EksNodesSshIngressDescription
+
+        # New - added for eks cluster access
+        EksClusterName: !Ref EksClusterName
+        EksRegion: !Ref AWS::Region
+        BastionKubectlVersion: !Ref BastionKubectlVersion
+
         VpcId: !GetAtt Network.Outputs.VpcId
         PublicSubnetId: !GetAtt Network.Outputs.PublicSubnet1Id
 
+  # ALB Stack
+  Alb:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateNewEksCluster
+    DependsOn:
+      - Network
+      - Eks
+    Properties:
+      TemplateURL: ./modules/alb/template.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        NamePrefix: !Ref NamePrefix
+        Environment: !Ref Environment
+        VpcId: !GetAtt Network.Outputs.VpcId
+        PublicSubnet1Id: !GetAtt Network.Outputs.PublicSubnet1Id
+        PublicSubnet2Id: !GetAtt Network.Outputs.PublicSubnet2Id
+        PrivateSubnet1Id: !GetAtt Network.Outputs.PrivateSubnet1Id
+        PrivateSubnet2Id: !GetAtt Network.Outputs.PrivateSubnet2Id
+        EksClusterName: !Ref EksClusterName
+        NodesSecurityGroupId: !GetAtt Eks.Outputs.EksClusterSecurityGroupId
+        AlbName: !Ref AlbName
+        AlbTargetGroupName: !Ref AlbTargetGroupName
+        AlbListenerPort: !Ref AlbListenerPort
+        AlbTargetPort: !Ref AlbTargetPort
+        AlbHealthCheckPath: !Ref AlbHealthCheckPath
+        NodeGroup1Name: !GetAtt Eks.Outputs.EksNodeGroup1Name
+        NodeGroup2Name: !GetAtt Eks.Outputs.EksNodeGroup2Name
+        NodesSecurityGroupId: !GetAtt Eks.Outputs.EksClusterSecurityGroupId
+
+  # Eks Stack
   Eks:
     Type: AWS::CloudFormation::Stack
     Condition: CreateNewEksCluster
@@ -830,10 +859,6 @@ Resources:
         AlbControllerIamPolicyNameSuffix: !Ref AlbControllerIamPolicyNameSuffix
         AlbControllerVersion: !Ref AlbControllerVersion
         VpcId: !GetAtt Network.Outputs.VpcId
-        #PublicSubnet1Id: !GetAtt Network.Outputs.PublicSubnet1Id
-        #PublicSubnet2Id: !GetAtt Network.Outputs.PublicSubnet2Id
-
-      
         PrivateSubnet1Id: !GetAtt Network.Outputs.PrivateSubnet1Id
         PrivateSubnet2Id: !GetAtt Network.Outputs.PrivateSubnet2Id
         BastionSecurityGroupId:
@@ -841,50 +866,28 @@ Resources:
             - CreateBastion
             - !GetAtt Bastion.Outputs.BastionSecurityGroupId
             - ''
-        # EksNodeAmiId: !Ref EksNodeAmiSsmParameter
-        # EksServiceCidr: !Ref EksServiceCidr
-
-  Alb:
-    Type: AWS::CloudFormation::Stack
-    Condition: CreateNewEksCluster
+   
+  BastionEksAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Condition: CreateBastion
     DependsOn:
-      - Network
       - Eks
-
+      - Bastion
     Properties:
-      TemplateURL: ./modules/alb/template.yaml
+      ClusterName: !GetAtt Eks.Outputs.EksClusterName
+      PrincipalArn: !GetAtt Bastion.Outputs.BastionRoleArn
+      Type: STANDARD
 
-      Parameters:
-        ProjectName: !Ref ProjectName
-        NamePrefix: !Ref NamePrefix
-        Environment: !Ref Environment
-
-        VpcId: !GetAtt Network.Outputs.VpcId
-
-        PublicSubnet1Id: !GetAtt Network.Outputs.PublicSubnet1Id
-        PublicSubnet2Id: !GetAtt Network.Outputs.PublicSubnet2Id
-
-        PrivateSubnet1Id: !GetAtt Network.Outputs.PrivateSubnet1Id
-        PrivateSubnet2Id: !GetAtt Network.Outputs.PrivateSubnet2Id
-
-        EksClusterName: !Ref EksClusterName
-        NodesSecurityGroupId: !GetAtt Eks.Outputs.EksClusterSecurityGroupId
-        AlbName: !Ref AlbName
-        AlbTargetGroupName: !Ref AlbTargetGroupName
-        AlbListenerPort: !Ref AlbListenerPort
-        AlbTargetPort: !Ref AlbTargetPort
-        AlbHealthCheckPath: !Ref AlbHealthCheckPath
-        NodeGroup1Name: !GetAtt Eks.Outputs.EksNodeGroup1Name
-        NodeGroup2Name: !GetAtt Eks.Outputs.EksNodeGroup2Name
-        NodesSecurityGroupId: !GetAtt Eks.Outputs.EksClusterSecurityGroupId
+      AccessPolicies:
+        - PolicyArn: !Ref BastionEKSAccessPolicyArn
+          AccessScope:
+            Type: cluster
+  
 
   SpendSmart:
     Type: AWS::CloudFormation::Stack
     Condition: InstallSpendSmart
     Properties:
-      #Subnets:
-      #- !Ref PublicSubnet1Id
-      #- !Ref PublicSubnet2Id
       TemplateURL: ./modules/spendsmart/template.yaml
       Parameters:
         ClusterName: !If [UseExistingEksCluster, !Ref ExistingEksClusterName, !GetAtt Eks.Outputs.EksClusterName]

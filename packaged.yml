@@ -27,11 +27,11 @@ Parameters:
     Default: 10.0.3.0/24
   AvailabilityZone1:
     Type: String
-    Default: ''
+    Default: us-east-1a
     Description: Optional AZ override. Empty selects the first available AZ.
   AvailabilityZone2:
     Type: String
-    Default: ''
+    Default: us-east-1b
     Description: Optional AZ override. Empty selects the second available AZ.
   EnableNatGateway:
     Type: String
@@ -161,11 +161,6 @@ Parameters:
     AllowedValues:
     - ON_DEMAND
     Default: ON_DEMAND
-  EksNodesEgressCidr:
-    Type: String
-    Default: 0.0.0.0/0
-    Description: Allows node bootstrap and the Load Balancer Controller to reach AWS
-      APIs through NAT; narrow with VPC endpoints if desired.
   S3BucketName:
     Type: String
     Default: athena-results-spendsmart-dev
@@ -349,6 +344,13 @@ Parameters:
   BastionMetadataHopLimit:
     Type: Number
     Default: 2
+  BastionKubectlVersion:
+    Type: String
+    Default: 1.36.2
+    Description: kubectl version installed on the bastion.
+  BastionEKSAccessPolicyArn:
+    Type: String
+    Default: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
   BastionRootVolumeEncrypted:
     Type: String
     AllowedValues:
@@ -561,14 +563,6 @@ Parameters:
   AnalyticsPolicyDescription:
     Type: String
     Default: Analytics, cost, AWS infrastructure and service metadata access
-  EksNodeAmiSsmParameter:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/eks/optimized-ami/1.36/amazon-linux-2023/x86_64/standard/recommended/image_id
-    Description: EKS-optimized AL2023 AMI. The version in the path must match EksClusterVersion.
-  EksServiceCidr:
-    Type: String
-    Default: 172.20.0.0/16
-    Description: Cluster service CIDR (EKS default for a 10.x VPC).
   SpendSmartWorkloadMode:
     Type: String
     AllowedValues:
@@ -803,9 +797,8 @@ Resources:
         ProjectName:
           Ref: ProjectName
         NamePrefix:
-          Ref: NamePrefix
-        Environment:
-          Ref: Environment
+          Ref: ProjectName
+        Environment: dev
         VpcCidr:
           Ref: VpcCidr
         PublicSubnet1Cidr:
@@ -820,8 +813,7 @@ Resources:
           Ref: AvailabilityZone1
         AvailabilityZone2:
           Ref: AvailabilityZone2
-        EnableNatGateway:
-          Ref: EnableNatGateway
+        EnableNatGateway: 'true'
         EksClusterName:
           Ref: EksClusterName
         EnableDnsHostnames:
@@ -860,7 +852,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Condition: CreateBastion
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/7741af201cb952738bcaba1f09dcf277.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/0501f7d8d1cce3f7734ffa7a36d3bf31.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix
@@ -917,6 +909,12 @@ Resources:
           Ref: BastionRootVolumeDeleteOnTermination
         EksNodesSshIngressDescription:
           Ref: EksNodesSshIngressDescription
+        EksClusterName:
+          Ref: EksClusterName
+        EksRegion:
+          Ref: AWS::Region
+        BastionKubectlVersion:
+          Ref: BastionKubectlVersion
         VpcId:
           Fn::GetAtt:
           - Network
@@ -925,6 +923,65 @@ Resources:
           Fn::GetAtt:
           - Network
           - Outputs.PublicSubnet1Id
+  Alb:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateNewEksCluster
+    DependsOn:
+    - Network
+    - Eks
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/5ab8a67ea44f94789f140573eb26e48e.template
+      Parameters:
+        ProjectName:
+          Ref: ProjectName
+        NamePrefix:
+          Ref: NamePrefix
+        Environment:
+          Ref: Environment
+        VpcId:
+          Fn::GetAtt:
+          - Network
+          - Outputs.VpcId
+        PublicSubnet1Id:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PublicSubnet1Id
+        PublicSubnet2Id:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PublicSubnet2Id
+        PrivateSubnet1Id:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PrivateSubnet1Id
+        PrivateSubnet2Id:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PrivateSubnet2Id
+        EksClusterName:
+          Ref: EksClusterName
+        NodesSecurityGroupId:
+          Fn::GetAtt:
+          - Eks
+          - Outputs.EksClusterSecurityGroupId
+        AlbName:
+          Ref: AlbName
+        AlbTargetGroupName:
+          Ref: AlbTargetGroupName
+        AlbListenerPort:
+          Ref: AlbListenerPort
+        AlbTargetPort:
+          Ref: AlbTargetPort
+        AlbHealthCheckPath:
+          Ref: AlbHealthCheckPath
+        NodeGroup1Name:
+          Fn::GetAtt:
+          - Eks
+          - Outputs.EksNodeGroup1Name
+        NodeGroup2Name:
+          Fn::GetAtt:
+          - Eks
+          - Outputs.EksNodeGroup2Name
   Eks:
     Type: AWS::CloudFormation::Stack
     Condition: CreateNewEksCluster
@@ -1054,65 +1111,27 @@ Resources:
             - Bastion
             - Outputs.BastionSecurityGroupId
           - ''
-  Alb:
-    Type: AWS::CloudFormation::Stack
-    Condition: CreateNewEksCluster
+  BastionEksAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Condition: CreateBastion
     DependsOn:
-    - Network
     - Eks
+    - Bastion
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/5ab8a67ea44f94789f140573eb26e48e.template
-      Parameters:
-        ProjectName:
-          Ref: ProjectName
-        NamePrefix:
-          Ref: NamePrefix
-        Environment:
-          Ref: Environment
-        VpcId:
-          Fn::GetAtt:
-          - Network
-          - Outputs.VpcId
-        PublicSubnet1Id:
-          Fn::GetAtt:
-          - Network
-          - Outputs.PublicSubnet1Id
-        PublicSubnet2Id:
-          Fn::GetAtt:
-          - Network
-          - Outputs.PublicSubnet2Id
-        PrivateSubnet1Id:
-          Fn::GetAtt:
-          - Network
-          - Outputs.PrivateSubnet1Id
-        PrivateSubnet2Id:
-          Fn::GetAtt:
-          - Network
-          - Outputs.PrivateSubnet2Id
-        EksClusterName:
-          Ref: EksClusterName
-        NodesSecurityGroupId:
-          Fn::GetAtt:
-          - Eks
-          - Outputs.EksClusterSecurityGroupId
-        AlbName:
-          Ref: AlbName
-        AlbTargetGroupName:
-          Ref: AlbTargetGroupName
-        AlbListenerPort:
-          Ref: AlbListenerPort
-        AlbTargetPort:
-          Ref: AlbTargetPort
-        AlbHealthCheckPath:
-          Ref: AlbHealthCheckPath
-        NodeGroup1Name:
-          Fn::GetAtt:
-          - Eks
-          - Outputs.EksNodeGroup1Name
-        NodeGroup2Name:
-          Fn::GetAtt:
-          - Eks
-          - Outputs.EksNodeGroup2Name
+      ClusterName:
+        Fn::GetAtt:
+        - Eks
+        - Outputs.EksClusterName
+      PrincipalArn:
+        Fn::GetAtt:
+        - Bastion
+        - Outputs.BastionRoleArn
+      Type: STANDARD
+      AccessPolicies:
+      - PolicyArn:
+          Ref: BastionEKSAccessPolicyArn
+        AccessScope:
+          Type: cluster
   SpendSmart:
     Type: AWS::CloudFormation::Stack
     Condition: InstallSpendSmart

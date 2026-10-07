@@ -111,6 +111,17 @@ Parameters:
     Type: String
   PublicSubnetId:
     Type: String
+
+  EksClusterName:
+    Type: String
+
+  EksRegion:
+    Type: String
+
+  BastionKubectlVersion:
+    Type: String
+    Default: '1.36.2'
+
 Conditions:
   CreateBastionEip: !And
     - !Condition CreateBastion
@@ -119,6 +130,47 @@ Conditions:
   BastionRootDeleteOnTermination: !Equals [!Ref BastionRootVolumeDeleteOnTermination, 'true']
   BastionRootEncrypted: !Equals [!Ref BastionRootVolumeEncrypted, 'true']
 Resources:
+
+
+  BastionRole:
+    Type: AWS::IAM::Role
+    Condition: CreateBastion
+    Properties:
+      RoleName: !Sub '${NamePrefix}-bastion-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+      Policies:
+        - PolicyName: BastionEksAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - eks:DescribeCluster
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:eks:${EksRegion}:${AWS::AccountId}:cluster/${EksClusterName}'
+
+  BastionInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: CreateBastion
+    Properties:
+      InstanceProfileName: !Sub '${NamePrefix}-bastion-profile'
+      Roles:
+        - !Ref BastionRole
+
+ 
+  
   BastionSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Condition: CreateBastion
@@ -149,6 +201,64 @@ Resources:
     Properties:
       ImageId: !Ref BastionAmiSsmParameter
       InstanceType: !Ref BastionInstanceType
+      IamInstanceProfile: !Ref BastionInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+
+          exec > >(tee /var/log/bastion-userdata.log | logger -t bastion-userdata -s 2>/dev/console) 2>&1
+
+          echo "Installing curl..."
+          dnf install -y curl
+
+          echo "Installing kubectl ${BastionKubectlVersion}..."
+
+          curl -fL \
+            -o /usr/local/bin/kubectl \
+            https://dl.k8s.io/release/v${BastionKubectlVersion}/bin/linux/amd64/kubectl
+
+          chmod +x /usr/local/bin/kubectl
+
+          kubectl version --client
+
+          echo "Waiting for EKS cluster..."
+
+          until aws eks describe-cluster \
+            --region ${EksRegion} \
+            --name ${EksClusterName} \
+            >/dev/null 2>&1
+          do
+            echo "EKS cluster is not ready yet..."
+            sleep 30
+          done
+
+          echo "EKS cluster is available."
+
+          mkdir -p /home/ec2-user/.kube
+
+          aws eks update-kubeconfig \
+            --region ${EksRegion} \
+            --name ${EksClusterName} \
+            --kubeconfig /home/ec2-user/.kube/config
+
+          chown -R ec2-user:ec2-user /home/ec2-user/.kube
+
+          echo "Waiting for EKS Kubernetes access..."
+
+          until kubectl \
+            --kubeconfig /home/ec2-user/.kube/config \
+            get nodes \
+            >/dev/null 2>&1
+          do
+            echo "Waiting for EKS access..."
+            sleep 30
+          done
+
+          echo "=========================================="
+          echo "EKS access is ready."
+          echo "Run: kubectl get nodes"
+          echo "=========================================="
       KeyName: !Ref Ec2KeyName
       SubnetId: !Ref PublicSubnetId
       SecurityGroupIds:
@@ -196,3 +306,7 @@ Outputs:
   BastionPublicIp:
     Condition: CreateBastion
     Value: !If [CreateBastionEip, !Ref BastionEip, !GetAtt BastionInstance.PublicIp]
+  BastionRoleArn:
+    Condition: CreateBastion
+    Description: IAM role ARN used by the bastion
+    Value: !GetAtt BastionRole.Arn
