@@ -145,7 +145,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Condition: CreateNewEksCluster
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/ef45a68aeabc75e49710eb63a025c693.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/282131d18c54faed619cb655505f4501.template
       Parameters:
         ProjectName: spendsmart
         NamePrefix:

@@ -35,12 +35,12 @@ Parameters:
 
   AvailabilityZone1:
     Type: String
-    Default: ''
+    Default: 'us-east-1a'
     Description: Optional AZ override. Empty selects the first available AZ.
 
   AvailabilityZone2:
     Type: String
-    Default: ''
+    Default: 'us-east-1b'
     Description: Optional AZ override. Empty selects the second available AZ.
 
   EnableNatGateway:
