@@ -1,0 +1,526 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SpendSmart eks nested stack
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: spendsmart
+  NamePrefix:
+    Type: String
+    Default: spendsmart-dev
+  Environment:
+    Type: String
+    Default: dev
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+  AvailabilityZone1:
+    Type: String
+    Default: ''
+  AvailabilityZone2:
+    Type: String
+    Default: ''
+  BastionEnabled:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  EksClusterName:
+    Type: String
+    Default: spendsmart
+  EksClusterVersion:
+    Type: String
+    Default: '1.36'
+  EksNodeInstanceType:
+    Type: String
+    Default: c7i-flex.large
+  EksNodeDesiredSize:
+    Type: Number
+    Default: 1
+  EksNodeMinSize:
+    Type: Number
+    Default: 1
+  EksNodeMaxSize:
+    Type: Number
+    Default: 1
+  EksNodeDiskSize:
+    Type: Number
+    Default: 48
+  EksNodeAmiType:
+    Type: String
+    Default: AL2023_x86_64_STANDARD
+  EksNodeCapacityType:
+    Type: String
+    AllowedValues: [ON_DEMAND]
+    Default: ON_DEMAND
+  EksAddonResolveConflicts:
+    Type: String
+    AllowedValues: [NONE, OVERWRITE, PRESERVE]
+    Default: OVERWRITE
+  EksAuthenticationMode:
+    Type: String
+    AllowedValues: [API, API_AND_CONFIG_MAP, CONFIG_MAP]
+    Default: API_AND_CONFIG_MAP
+  EksBootstrapCreatorAdmin:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  EksClusterRoleNameSuffix:
+    Type: String
+    Default: -eks-cluster
+  EksNodeRoleNameSuffix:
+    Type: String
+    Default: -eks-nodes
+  EksClusterRoleAssumeService:
+    Type: String
+    Default: eks.amazonaws.com
+  EksNodeRoleAssumeService:
+    Type: String
+    Default: ec2.amazonaws.com
+  EksClusterPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+  EksVpcResourceControllerPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEKSVPCResourceController
+  EksNodeWorkerPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+  EksNodeCniPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+  EksNodeEcrPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+  EksNodeDiskType:
+    Type: String
+    Default: gp3
+  EksNodeDeviceName:
+    Type: String
+    Default: /dev/xvda
+  EksNodeVolumeEncrypted:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  EksNodeVolumeDeleteOnTermination:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  EksNodeMetadataEndpoint:
+    Type: String
+    AllowedValues: [enabled, disabled]
+    Default: enabled
+  EksNodeMetadataTokens:
+    Type: String
+    AllowedValues: [required, optional]
+    Default: required
+  EksNodeMetadataHopLimit:
+    Type: Number
+    Default: 2
+  EksNodeLaunchTemplateSuffix:
+    Type: String
+    Default: -ng
+  EksNodeInstanceNameSuffix:
+    Type: String
+    Default: -eks-node
+  EksNodeGroupNamePrefix:
+    Type: String
+    Default: node-group-
+  EksNodeGroupTagNameSuffix:
+    Type: String
+    Default: -node-group-
+  EksNodeUpdateMaxUnavailable:
+    Type: Number
+    Default: 1
+  EksAddonVpcCniName:
+    Type: String
+    Default: vpc-cni
+  EksAddonKubeProxyName:
+    Type: String
+    Default: kube-proxy
+  EksAddonCoreDnsName:
+    Type: String
+    Default: coredns
+  EksNodesSecurityGroupDescription:
+    Type: String
+    Default: Additional security group for EKS worker nodes
+  EksNodesSecurityGroupNameSuffix:
+    Type: String
+    Default: -eks-nodes
+  EksClusterTagKeyPrefix:
+    Type: String
+    Default: kubernetes.io/cluster/
+  EksClusterTagValue:
+    Type: String
+    Default: owned
+  AlbControllerNamespace:
+    Type: String
+    Default: kube-system
+  AlbControllerServiceAccountName:
+    Type: String
+    Default: aws-load-balancer-controller
+  AlbControllerIamPolicyNameSuffix:
+    Type: String
+    Default: -aws-load-balancer-controller
+  AlbControllerVersion:
+    Type: String
+    Default: v2.11.0
+    Description: AWS Load Balancer Controller release; keep its Helm chart and IAM policy versions aligned.
+  VpcId:
+    Type: String
+  PrivateSubnet1Id:
+    Type: String
+  PrivateSubnet2Id:
+    Type: String
+  BastionSecurityGroupId:
+    Type: String
+    Default: ''
+
+Conditions:
+  EksBootstrapAdminEnabled: !Equals [!Ref EksBootstrapCreatorAdmin, 'true']
+  HasBastion: !Not [!Equals [!Ref BastionSecurityGroupId, '']]
+
+Resources:
+  EksClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}${EksClusterRoleNameSuffix}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: !Ref EksClusterRoleAssumeService
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref EksClusterPolicyArn
+        - !Ref EksVpcResourceControllerPolicyArn
+
+  EksNodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}${EksNodeRoleNameSuffix}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: !Ref EksNodeRoleAssumeService
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref EksNodeWorkerPolicyArn
+        - !Ref EksNodeCniPolicyArn
+        - !Ref EksNodeEcrPolicyArn
+
+  EksCluster:
+    Type: AWS::EKS::Cluster
+    DependsOn: [EksClusterRole]
+    Properties:
+      Name: !Ref EksClusterName
+      Version: !Ref EksClusterVersion
+      RoleArn: !GetAtt EksClusterRole.Arn
+      AccessConfig:
+        AuthenticationMode: !Ref EksAuthenticationMode
+        BootstrapClusterCreatorAdminPermissions: !If [EksBootstrapAdminEnabled, true, false]
+      BootstrapSelfManagedAddons: false
+      ResourcesVpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet1Id
+          - !Ref PrivateSubnet2Id
+        EndpointPrivateAccess: true
+        EndpointPublicAccess: false
+      UpgradePolicy:
+        SupportType: STANDARD
+
+  EksAddonPodIdentityAgent:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref EksCluster
+      AddonName: eks-pod-identity-agent
+      ResolveConflicts: !Ref EksAddonResolveConflicts
+
+  EksAddonVpcCni:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref EksCluster
+      AddonName: !Ref EksAddonVpcCniName
+      ResolveConflicts: !Ref EksAddonResolveConflicts
+
+  EksAddonKubeProxy:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref EksCluster
+      AddonName: !Ref EksAddonKubeProxyName
+      ResolveConflicts: !Ref EksAddonResolveConflicts
+
+  # CoreDNS is a Deployment: it can only become ACTIVE once nodes exist,
+  # so it is created AFTER the node groups.
+  EksAddonCoreDns:
+    Type: AWS::EKS::Addon
+    DependsOn: [EksNodeGroupAz1, EksNodeGroupAz2]
+    Properties:
+      ClusterName: !Ref EksCluster
+      AddonName: !Ref EksAddonCoreDnsName
+      ResolveConflicts: !Ref EksAddonResolveConflicts
+
+  EksNodesSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Ref EksNodesSecurityGroupDescription
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 10250
+          ToPort: 10250
+          CidrIp: !Ref VpcCidr
+          Description: EKS control plane to kubelet
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Node egress
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${EksNodesSecurityGroupNameSuffix}'
+        - Key: !Sub '${EksClusterTagKeyPrefix}${EksClusterName}'
+          Value: !Ref EksClusterTagValue
+
+  EksNodesSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EksNodesSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref EksNodesSecurityGroup
+      Description: Node to node communication
+
+  EksNodesSshIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasBastion
+    Properties:
+      GroupId: !Ref EksNodesSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId: !Ref BastionSecurityGroupId
+      Description: SSH from bastion
+
+  EksNodeGroupAz1:
+    Type: AWS::EKS::Nodegroup
+    DependsOn:
+      - EksAddonVpcCni
+      - EksAddonKubeProxy
+      - EksAddonPodIdentityAgent
+    Properties:
+      ClusterName: !Ref EksCluster
+      NodegroupName: !Sub '${EksNodeGroupNamePrefix}1'
+      NodeRole: !GetAtt EksNodeRole.Arn
+      Subnets:
+        - !Ref PrivateSubnet1Id
+      InstanceTypes:
+        - !Ref EksNodeInstanceType
+      AmiType: !Ref EksNodeAmiType
+      CapacityType: !Ref EksNodeCapacityType
+      DiskSize: !Ref EksNodeDiskSize
+      ScalingConfig:
+        DesiredSize: !Ref EksNodeDesiredSize
+        MinSize: !Ref EksNodeMinSize
+        MaxSize: !Ref EksNodeMaxSize
+      UpdateConfig:
+        MaxUnavailable: !Ref EksNodeUpdateMaxUnavailable
+      Tags:
+        Name: !Sub '${NamePrefix}${EksNodeGroupTagNameSuffix}1'
+
+  EksNodeGroupAz2:
+    Type: AWS::EKS::Nodegroup
+    DependsOn:
+      - EksAddonVpcCni
+      - EksAddonKubeProxy
+      - EksAddonPodIdentityAgent
+    Properties:
+      ClusterName: !Ref EksCluster
+      NodegroupName: !Sub '${EksNodeGroupNamePrefix}2'
+      NodeRole: !GetAtt EksNodeRole.Arn
+      Subnets:
+        - !Ref PrivateSubnet2Id
+      InstanceTypes:
+        - !Ref EksNodeInstanceType
+      AmiType: !Ref EksNodeAmiType
+      CapacityType: !Ref EksNodeCapacityType
+      DiskSize: !Ref EksNodeDiskSize
+      ScalingConfig:
+        DesiredSize: !Ref EksNodeDesiredSize
+        MinSize: !Ref EksNodeMinSize
+        MaxSize: !Ref EksNodeMaxSize
+      UpdateConfig:
+        MaxUnavailable: !Ref EksNodeUpdateMaxUnavailable
+      Tags:
+        Name: !Sub '${NamePrefix}${EksNodeGroupTagNameSuffix}2'
+
+  AlbControllerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}${AlbControllerIamPolicyNameSuffix}-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+      Policies:
+        - PolicyName: !Sub '${NamePrefix}${AlbControllerIamPolicyNameSuffix}'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [iam:CreateServiceLinkedRole]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'iam:AWSServiceName': elasticloadbalancing.amazonaws.com
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeAccountAttributes
+                  - ec2:DescribeAddresses
+                  - ec2:DescribeAvailabilityZones
+                  - ec2:DescribeInternetGateways
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeVpcPeeringConnections
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeInstances
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeTags
+                  - ec2:GetCoipPoolUsage
+                  - ec2:DescribeCoipPools
+                  - ec2:GetSecurityGroupsForVpc
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DescribeLoadBalancerAttributes
+                  - elasticloadbalancing:DescribeListeners
+                  - elasticloadbalancing:DescribeListenerCertificates
+                  - elasticloadbalancing:DescribeSSLPolicies
+                  - elasticloadbalancing:DescribeRules
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetGroupAttributes
+                  - elasticloadbalancing:DescribeTargetHealth
+                  - elasticloadbalancing:DescribeTags
+                  - elasticloadbalancing:DescribeTrustStores
+                  - elasticloadbalancing:DescribeListenerAttributes
+                  - elasticloadbalancing:DescribeCapacityReservation
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - cognito-idp:DescribeUserPoolClient
+                  - acm:ListCertificates
+                  - acm:DescribeCertificate
+                  - iam:ListServerCertificates
+                  - iam:GetServerCertificate
+                  - waf-regional:GetWebACL
+                  - waf-regional:GetWebACLForResource
+                  - waf-regional:AssociateWebACL
+                  - waf-regional:DisassociateWebACL
+                  - wafv2:GetWebACL
+                  - wafv2:GetWebACLForResource
+                  - wafv2:AssociateWebACL
+                  - wafv2:DisassociateWebACL
+                  - shield:GetSubscriptionState
+                  - shield:DescribeProtection
+                  - shield:CreateProtection
+                  - shield:DeleteProtection
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:CreateSecurityGroup
+                  - ec2:DeleteSecurityGroup
+                Resource: '*'
+              - Effect: Allow
+                Action: [ec2:CreateTags, ec2:DeleteTags]
+                Resource: !Sub 'arn:${AWS::Partition}:ec2:*:*:security-group/*'
+              - Effect: Allow
+                Action:
+                  - elasticloadbalancing:CreateLoadBalancer
+                  - elasticloadbalancing:CreateTargetGroup
+                  - elasticloadbalancing:CreateListener
+                  - elasticloadbalancing:DeleteListener
+                  - elasticloadbalancing:CreateRule
+                  - elasticloadbalancing:DeleteRule
+                Resource: '*'
+              - Effect: Allow
+                Action: [elasticloadbalancing:AddTags, elasticloadbalancing:RemoveTags]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:targetgroup/*/*'
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:loadbalancer/net/*/*'
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:loadbalancer/app/*/*'
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:listener/net/*/*/*'
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:listener/app/*/*/*'
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:listener-rule/net/*/*/*'
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:listener-rule/app/*/*/*'
+              - Effect: Allow
+                Action:
+                  - elasticloadbalancing:ModifyLoadBalancerAttributes
+                  - elasticloadbalancing:SetIpAddressType
+                  - elasticloadbalancing:SetSecurityGroups
+                  - elasticloadbalancing:SetSubnets
+                  - elasticloadbalancing:DeleteLoadBalancer
+                  - elasticloadbalancing:ModifyTargetGroup
+                  - elasticloadbalancing:ModifyTargetGroupAttributes
+                  - elasticloadbalancing:DeleteTargetGroup
+                  - elasticloadbalancing:ModifyListenerAttributes
+                  - elasticloadbalancing:ModifyCapacityReservation
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - elasticloadbalancing:RegisterTargets
+                  - elasticloadbalancing:DeregisterTargets
+                Resource: !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:targetgroup/*/*'
+              - Effect: Allow
+                Action:
+                  - elasticloadbalancing:SetWebAcl
+                  - elasticloadbalancing:ModifyListener
+                  - elasticloadbalancing:AddListenerCertificates
+                  - elasticloadbalancing:RemoveListenerCertificates
+                  - elasticloadbalancing:ModifyRule
+                Resource: '*'
+
+  AlbControllerPodIdentityAssociation:
+    Type: AWS::EKS::PodIdentityAssociation
+    Properties:
+      ClusterName: !Ref EksCluster
+      Namespace: !Ref AlbControllerNamespace
+      ServiceAccount: !Ref AlbControllerServiceAccountName
+      RoleArn: !GetAtt AlbControllerRole.Arn
+
+Outputs:
+  EksClusterName:
+    Value: !Ref EksCluster
+  EksClusterEndpoint:
+    Value: !GetAtt EksCluster.Endpoint
+  EksClusterArn:
+    Value: !GetAtt EksCluster.Arn
+  EksClusterSecurityGroupId:
+    Value: !GetAtt EksCluster.ClusterSecurityGroupId
+  EksNodesSecurityGroupId:
+    Value: !Ref EksNodesSecurityGroup
+  EksNodeGroupNames:
+    Description: JSON-encoded string array of node group names
+    Value: !Sub
+      - '["${NodeGroup1}","${NodeGroup2}"]'
+      - NodeGroup1: !Ref EksNodeGroupAz1
+        NodeGroup2: !Ref EksNodeGroupAz2
+  EksConfigureKubectl:
+    Value: !Sub 'aws eks update-kubeconfig --region ${AWS::Region} --name ${EksCluster}'
+  AlbControllerRoleArn:
+    Description: IAM role assumed by the AWS Load Balancer Controller through EKS Pod Identity
+    Value: !GetAtt AlbControllerRole.Arn
+  AlbControllerNamespace:
+    Value: !Ref AlbControllerNamespace
+  AlbControllerServiceAccountName:
+    Value: !Ref AlbControllerServiceAccountName
+  AlbControllerVersion:
+    Value: !Ref AlbControllerVersion
+  EksNodeGroup1Name:
+    Value: !Sub '${EksNodeGroupNamePrefix}1'
+  EksNodeGroup2Name:
+    Value: !Sub '${EksNodeGroupNamePrefix}2'

@@ -1,0 +1,1572 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SpendSmart root stack orchestrating nested infrastructure templates
+Parameters:
+  ProjectName:
+    Type: String
+    Default: spendsmart
+  NamePrefix:
+    Type: String
+    Default: spendsmart-dev
+  Environment:
+    Type: String
+    Default: dev
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.0.0.0/24
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.0.1.0/24
+  PrivateSubnet1Cidr:
+    Type: String
+    Default: 10.0.2.0/24
+  PrivateSubnet2Cidr:
+    Type: String
+    Default: 10.0.3.0/24
+  AvailabilityZone1:
+    Type: String
+    Default: ''
+    Description: Optional AZ override. Empty selects the first available AZ.
+  AvailabilityZone2:
+    Type: String
+    Default: ''
+    Description: Optional AZ override. Empty selects the second available AZ.
+  EnableNatGateway:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  BastionEnabled:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  BastionAssociateEip:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  BastionInstanceType:
+    Type: String
+    Default: t3.micro
+  BastionAmiSsmParameter:
+    Type: String
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+  BastionRootVolumeSize:
+    Type: Number
+    Default: 8
+  BastionRootVolumeType:
+    Type: String
+    Default: gp3
+  BastionRootDeviceName:
+    Type: String
+    Default: /dev/xvda
+  Ec2KeyPairMode:
+    Type: String
+    AllowedValues:
+    - Existing
+    - CreateNew
+    Default: Existing
+    Description: Use an existing regional key pair or create a stack-owned key pair
+      for the bastion.
+  ExistingEc2KeyName:
+    Type: String
+    Default: mukesh
+    Description: Existing key pair name; used only when Ec2KeyPairMode is Existing.
+  NewEc2KeyPairName:
+    Type: String
+    Default: spendsmart-dev-generated
+    Description: Unique key pair name; used only when Ec2KeyPairMode is CreateNew.
+  BastionSshCidrs:
+    Type: CommaDelimitedList
+    Default: 0.0.0.0/0,103.87.45.139/32
+    Description: CIDR allowlist for SSH to the bastion. Including 0.0.0.0/0 permits
+      SSH from any IPv4 address.
+  EksClusterName:
+    Type: String
+    Default: spendsmart
+  EksClusterMode:
+    Type: String
+    AllowedValues:
+    - CreateNew
+    - UseExisting
+    Default: CreateNew
+  ExistingEksClusterName:
+    Type: String
+    Default: ''
+    Description: Existing cluster name; required when EksClusterMode is UseExisting.
+  ExistingEksVpcId:
+    Type: String
+    Default: ''
+    Description: VPC ID containing the existing cluster and the private deployment
+      subnet.
+  ExistingEksPrivateSubnetId:
+    Type: String
+    Default: ''
+    Description: Private subnet ID in the existing cluster VPC where the deployment
+      host can reach the cluster API.
+  ExistingEksClusterSecurityGroupId:
+    Type: String
+    Default: ''
+    Description: Existing EKS cluster security group ID for HTTPS access from the
+      deployment host.
+  ExistingEksLoadBalancerControllerReady:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'false'
+    Description: Confirm the existing cluster already has AWS Load Balancer Controller
+      and AWS permissions.
+  EksClusterVersion:
+    Type: String
+    Default: '1.36'
+  EksEndpointPrivateAccess:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  EksEndpointPublicAccess:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'false'
+  EksNodeInstanceType:
+    Type: String
+    Default: c7i-flex.large
+  EksNodeDesiredSize:
+    Type: Number
+    Default: 1
+  EksNodeMinSize:
+    Type: Number
+    Default: 1
+  EksNodeMaxSize:
+    Type: Number
+    Default: 1
+  EksNodeDiskSize:
+    Type: Number
+    Default: 48
+  EksNodeAmiType:
+    Type: String
+    Default: AL2023_x86_64_STANDARD
+  EksNodeCapacityType:
+    Type: String
+    AllowedValues:
+    - ON_DEMAND
+    Default: ON_DEMAND
+  EksNodesEgressCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: Allows node bootstrap and the Load Balancer Controller to reach AWS
+      APIs through NAT; narrow with VPC endpoints if desired.
+  S3BucketName:
+    Type: String
+    Default: athena-results-spendsmart-dev
+    Description: Must be globally unique. Change if this bucket name is already taken.
+  DataPrefix:
+    Type: String
+    Default: data
+  AthenaResultsPrefix:
+    Type: String
+    Default: athena-results
+  AthenaResultsExpirationDays:
+    Type: Number
+    Default: 30
+  GlueDatabaseName:
+    Type: String
+    Default: spendsmart_analytics
+  AthenaWorkgroupName:
+    Type: String
+    Default: spendsmart
+  AthenaBytesScannedCutoff:
+    Type: Number
+    Default: 10737418240
+  AthenaWorkgroupState:
+    Type: String
+    AllowedValues:
+    - ENABLED
+    - DISABLED
+    Default: ENABLED
+  AthenaEnforceWorkgroupConfiguration:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  AthenaPublishCloudWatchMetrics:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'false'
+  AthenaResultEncryptionOption:
+    Type: String
+    AllowedValues:
+    - SSE_S3
+    - SSE_KMS
+    - CSE_KMS
+    Default: SSE_S3
+  AthenaLifecycleEnabled:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  AthenaLifecycleStatus:
+    Type: String
+    AllowedValues:
+    - Enabled
+    - Disabled
+    Default: Enabled
+  GlueRoleAssumeService:
+    Type: String
+    Default: glue.amazonaws.com
+  GlueServiceRolePolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+  EnableDnsHostnames:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  EnableDnsSupport:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  InternetRouteCidr:
+    Type: String
+    Default: 0.0.0.0/0
+  TcpProtocol:
+    Type: String
+    Default: tcp
+  AllTrafficProtocol:
+    Type: String
+    Default: '-1'
+  ManagedByTag:
+    Type: String
+    Default: CFT
+  VpcNameSuffix:
+    Type: String
+    Default: -vpc
+  InternetGatewayNameSuffix:
+    Type: String
+    Default: -igw
+  PublicSubnetNameSuffix:
+    Type: String
+    Default: -public-
+  PrivateSubnetNameSuffix:
+    Type: String
+    Default: -private-
+  PublicRouteTableNameSuffix:
+    Type: String
+    Default: -public-rt
+  PrivateRouteTableNameSuffix:
+    Type: String
+    Default: -private-rt-
+  NatEipNameSuffix:
+    Type: String
+    Default: -nat-eip-
+  NatGatewayNameSuffix:
+    Type: String
+    Default: -nat-
+  BastionNameSuffix:
+    Type: String
+    Default: -bastion
+  BastionEipNameSuffix:
+    Type: String
+    Default: -bastion-eip
+  EksAddonResolveConflicts:
+    Type: String
+    AllowedValues:
+    - NONE
+    - OVERWRITE
+    - PRESERVE
+    Default: OVERWRITE
+  AlbName:
+    Type: String
+    Default: spendsmart-dev-alb
+  AlbTargetGroupName:
+    Type: String
+    Default: spendsmart-dev-tg
+  AlbListenerPort:
+    Type: Number
+    Default: 80
+  AlbTargetPort:
+    Type: Number
+    Default: 30080
+  AlbHealthCheckPath:
+    Type: String
+    Default: /healthz
+  PublicSubnetTierTag:
+    Type: String
+    Default: public
+  PrivateSubnetTierTag:
+    Type: String
+    Default: private
+  AlbSubnetRoleTag:
+    Type: String
+    Default: '1'
+  ClusterSubnetTagValue:
+    Type: String
+    Default: shared
+  BastionSshPort:
+    Type: Number
+    Default: 22
+  BastionEgressCidr:
+    Type: String
+    Default: 0.0.0.0/0
+  BastionSecurityGroupDescription:
+    Type: String
+    Default: Bastion host in a public subnet
+  BastionEgressDescription:
+    Type: String
+    Default: Bastion egress
+  BastionRoleTag:
+    Type: String
+    Default: bastion
+  BastionMetadataEndpoint:
+    Type: String
+    AllowedValues:
+    - enabled
+    - disabled
+    Default: enabled
+  BastionMetadataTokens:
+    Type: String
+    AllowedValues:
+    - required
+    - optional
+    Default: required
+  BastionMetadataHopLimit:
+    Type: Number
+    Default: 2
+  BastionRootVolumeEncrypted:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  BastionRootVolumeDeleteOnTermination:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  EksAuthenticationMode:
+    Type: String
+    AllowedValues:
+    - API
+    - API_AND_CONFIG_MAP
+    - CONFIG_MAP
+    Default: API_AND_CONFIG_MAP
+  EksBootstrapCreatorAdmin:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  EksClusterRoleNameSuffix:
+    Type: String
+    Default: -eks-cluster
+  EksNodeRoleNameSuffix:
+    Type: String
+    Default: -eks-nodes
+  EksClusterRoleAssumeService:
+    Type: String
+    Default: eks.amazonaws.com
+  EksNodeRoleAssumeService:
+    Type: String
+    Default: ec2.amazonaws.com
+  EksClusterPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+  EksVpcResourceControllerPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEKSVPCResourceController
+  EksNodeWorkerPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+  EksNodeCniPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+  EksNodeEcrPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+  EksNodeDiskType:
+    Type: String
+    Default: gp3
+  EksNodeDeviceName:
+    Type: String
+    Default: /dev/xvda
+  EksNodeVolumeEncrypted:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  EksNodeVolumeDeleteOnTermination:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  EksNodeMetadataEndpoint:
+    Type: String
+    AllowedValues:
+    - enabled
+    - disabled
+    Default: enabled
+  EksNodeMetadataTokens:
+    Type: String
+    AllowedValues:
+    - required
+    - optional
+    Default: required
+  EksNodeMetadataHopLimit:
+    Type: Number
+    Default: 2
+  EksNodeLaunchTemplateSuffix:
+    Type: String
+    Default: -ng
+  EksNodeInstanceNameSuffix:
+    Type: String
+    Default: -eks-node
+  EksNodeGroupNamePrefix:
+    Type: String
+    Default: node-group-
+  EksNodeGroupTagNameSuffix:
+    Type: String
+    Default: -node-group-
+  EksNodeUpdateMaxUnavailable:
+    Type: Number
+    Default: 1
+  EksAddonVpcCniName:
+    Type: String
+    Default: vpc-cni
+  EksAddonKubeProxyName:
+    Type: String
+    Default: kube-proxy
+  EksAddonCoreDnsName:
+    Type: String
+    Default: coredns
+  EksNodesSecurityGroupDescription:
+    Type: String
+    Default: Additional security group for EKS worker nodes
+  EksNodesSecurityGroupNameSuffix:
+    Type: String
+    Default: -eks-nodes
+  EksClusterTagKeyPrefix:
+    Type: String
+    Default: kubernetes.io/cluster/
+  EksClusterTagValue:
+    Type: String
+    Default: owned
+  EksNodesSshIngressDescription:
+    Type: String
+    Default: SSH from bastion
+  EksNodesEgressDescription:
+    Type: String
+    Default: Node egress
+  AlbControllerNamespace:
+    Type: String
+    Default: kube-system
+  AlbControllerServiceAccountName:
+    Type: String
+    Default: aws-load-balancer-controller
+  AlbControllerIamPolicyNameSuffix:
+    Type: String
+    Default: -aws-load-balancer-controller
+  AlbControllerVersion:
+    Type: String
+    Default: v2.11.0
+    Description: AWS Load Balancer Controller release; keep its Helm chart and IAM
+      policy versions aligned.
+  S3VersioningEnabled:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  S3EncryptionAlgorithm:
+    Type: String
+    AllowedValues:
+    - AES256
+    - aws:kms
+    Default: AES256
+  S3KmsKeyArn:
+    Type: String
+    Default: ''
+  S3BucketKeyEnabled:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  S3BlockPublicAcls:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  S3BlockPublicPolicy:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  S3IgnorePublicAcls:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  S3RestrictPublicBuckets:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+  AthenaLifecycleRuleId:
+    Type: String
+    Default: expire-athena-results
+  GlueDatabaseDescription:
+    Type: String
+    Default: SpendSmart analytics catalog
+  GlueRoleNameSuffix:
+    Type: String
+    Default: -glue
+  GlueS3PolicyNameSuffix:
+    Type: String
+    Default: -glue-s3
+  AnalyticsRoleNameSuffix:
+    Type: String
+    Default: -analytics-role
+  AnalyticsPolicyNameSuffix:
+    Type: String
+    Default: -analytics-policy
+  AnalyticsTrustedPrincipalArn:
+    Type: String
+    Default: ''
+    Description: Principal ARN allowed to assume the analytics role. Empty trusts
+      the current account root.
+  AnalyticsPolicyDescription:
+    Type: String
+    Default: Analytics, cost, AWS infrastructure and service metadata access
+  EksNodeAmiSsmParameter:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/eks/optimized-ami/1.36/amazon-linux-2023/x86_64/standard/recommended/image_id
+    Description: EKS-optimized AL2023 AMI. The version in the path must match EksClusterVersion.
+  EksServiceCidr:
+    Type: String
+    Default: 172.20.0.0/16
+    Description: Cluster service CIDR (EKS default for a 10.x VPC).
+  SpendSmartWorkloadMode:
+    Type: String
+    AllowedValues:
+    - InstallNew
+    - LeaveExisting
+    Default: LeaveExisting
+    Description: Install the SpendSmart Helm release or leave existing app workloads
+      untouched.
+  SpendSmartValuesS3Uri:
+    Type: String
+    Default: ''
+    Description: Optional S3 URI for non-secret Helm overrides. Pair with SpendSmartValuesS3ObjectArn;
+      do not store credentials in this file.
+  SpendSmartValuesS3ObjectArn:
+    Type: String
+    Default: ''
+    Description: Exact S3 object ARN for the optional Helm values file, for example
+      arn:aws:s3:::bucket/path/values.yaml.
+  SpendSmartAlbScheme:
+    Type: String
+    AllowedValues:
+    - internet-facing
+    - internal
+    Default: internet-facing
+  AlbControllerChartVersion:
+    Type: String
+    Default: 1.11.0
+    Description: AWS Load Balancer Controller Helm chart version matching AlbControllerVersion.
+Rules:
+  ExistingEksInputsRequired:
+    RuleCondition:
+      Fn::Equals:
+      - Ref: EksClusterMode
+      - UseExisting
+    Assertions:
+    - Assert:
+        Fn::Not:
+        - Fn::Equals:
+          - Ref: ExistingEksClusterName
+          - ''
+      AssertDescription: ExistingEksClusterName is required in UseExisting mode.
+    - Assert:
+        Fn::Not:
+        - Fn::Equals:
+          - Ref: ExistingEksVpcId
+          - ''
+      AssertDescription: ExistingEksVpcId is required in UseExisting mode.
+    - Assert:
+        Fn::Not:
+        - Fn::Equals:
+          - Ref: ExistingEksPrivateSubnetId
+          - ''
+      AssertDescription: ExistingEksPrivateSubnetId is required in UseExisting mode.
+    - Assert:
+        Fn::Not:
+        - Fn::Equals:
+          - Ref: ExistingEksClusterSecurityGroupId
+          - ''
+      AssertDescription: ExistingEksClusterSecurityGroupId is required in UseExisting
+        mode.
+  ExistingEksControllerRequired:
+    RuleCondition:
+      Fn::And:
+      - Fn::Equals:
+        - Ref: EksClusterMode
+        - UseExisting
+      - Fn::Equals:
+        - Ref: SpendSmartWorkloadMode
+        - InstallNew
+    Assertions:
+    - Assert:
+        Fn::Equals:
+        - Ref: ExistingEksLoadBalancerControllerReady
+        - 'true'
+      AssertDescription: Install AWS Load Balancer Controller with AWS permissions
+        before installing SpendSmart into an existing cluster.
+Conditions:
+  CreateNewEc2KeyPair:
+    Fn::Equals:
+    - Ref: Ec2KeyPairMode
+    - CreateNew
+  CreateNewEksCluster:
+    Fn::Equals:
+    - Ref: EksClusterMode
+    - CreateNew
+  UseExistingEksCluster:
+    Fn::Equals:
+    - Ref: EksClusterMode
+    - UseExisting
+  InstallSpendSmart:
+    Fn::Equals:
+    - Ref: SpendSmartWorkloadMode
+    - InstallNew
+  UseDefaultAz1:
+    Fn::Equals:
+    - Ref: AvailabilityZone1
+    - ''
+  UseDefaultAz2:
+    Fn::Equals:
+    - Ref: AvailabilityZone2
+    - ''
+  DnsHostnamesEnabled:
+    Fn::Equals:
+    - Ref: EnableDnsHostnames
+    - 'true'
+  DnsSupportEnabled:
+    Fn::Equals:
+    - Ref: EnableDnsSupport
+    - 'true'
+  NatEnabled:
+    Fn::Equals:
+    - Ref: EnableNatGateway
+    - 'true'
+  CreateBastion:
+    Fn::And:
+    - Condition: CreateNewEksCluster
+    - Fn::Equals:
+      - Ref: BastionEnabled
+      - 'true'
+    - Fn::Equals:
+      - Ref: BastionEnabled
+      - 'true'
+  CreateBastionEip:
+    Fn::And:
+    - Condition: CreateBastion
+    - Fn::Equals:
+      - Ref: BastionAssociateEip
+      - 'true'
+  BastionRootEncrypted:
+    Fn::Equals:
+    - Ref: BastionRootVolumeEncrypted
+    - 'true'
+  BastionRootDeleteOnTermination:
+    Fn::Equals:
+    - Ref: BastionRootVolumeDeleteOnTermination
+    - 'true'
+  EksBootstrapAdminEnabled:
+    Fn::Equals:
+    - Ref: EksBootstrapCreatorAdmin
+    - 'true'
+  EksPrivateEndpointEnabled:
+    Fn::Equals:
+    - Ref: EksEndpointPrivateAccess
+    - 'true'
+  EksPublicEndpointEnabled:
+    Fn::Equals:
+    - Ref: EksEndpointPublicAccess
+    - 'true'
+  EksNodeVolumeEncryptedCondition:
+    Fn::Equals:
+    - Ref: EksNodeVolumeEncrypted
+    - 'true'
+  EksNodeVolumeDeleteCondition:
+    Fn::Equals:
+    - Ref: EksNodeVolumeDeleteOnTermination
+    - 'true'
+  S3VersioningEnabledCondition:
+    Fn::Equals:
+    - Ref: S3VersioningEnabled
+    - 'true'
+  S3BucketKeyEnabledCondition:
+    Fn::Equals:
+    - Ref: S3BucketKeyEnabled
+    - 'true'
+  S3BlockPublicAclsCondition:
+    Fn::Equals:
+    - Ref: S3BlockPublicAcls
+    - 'true'
+  S3BlockPublicPolicyCondition:
+    Fn::Equals:
+    - Ref: S3BlockPublicPolicy
+    - 'true'
+  S3IgnorePublicAclsCondition:
+    Fn::Equals:
+    - Ref: S3IgnorePublicAcls
+    - 'true'
+  S3RestrictPublicBucketsCondition:
+    Fn::Equals:
+    - Ref: S3RestrictPublicBuckets
+    - 'true'
+  UseDefaultAnalyticsPrincipal:
+    Fn::Equals:
+    - Ref: AnalyticsTrustedPrincipalArn
+    - ''
+  S3UsesKms:
+    Fn::Equals:
+    - Ref: S3EncryptionAlgorithm
+    - aws:kms
+  AthenaLifecycleRequested:
+    Fn::Equals:
+    - Ref: AthenaLifecycleEnabled
+    - 'true'
+  AthenaLifecycleDaysZero:
+    Fn::Equals:
+    - Ref: AthenaResultsExpirationDays
+    - '0'
+  AthenaLifecycleActive:
+    Fn::And:
+    - Condition: AthenaLifecycleRequested
+    - Fn::Not:
+      - Condition: AthenaLifecycleDaysZero
+  AthenaEnforceConfiguration:
+    Fn::Equals:
+    - Ref: AthenaEnforceWorkgroupConfiguration
+    - 'true'
+  AthenaPublishMetrics:
+    Fn::Equals:
+    - Ref: AthenaPublishCloudWatchMetrics
+    - 'true'
+Resources:
+  GeneratedEc2KeyPair:
+    Type: AWS::EC2::KeyPair
+    Condition: CreateNewEc2KeyPair
+    Properties:
+      KeyName:
+        Ref: NewEc2KeyPairName
+      KeyFormat: pem
+      KeyType: rsa
+      Tags:
+      - Key: Project
+        Value:
+          Ref: ProjectName
+      - Key: Environment
+        Value:
+          Ref: Environment
+  Network:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateNewEksCluster
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/ddd4abb227eb668e8cc718b488cebf73.template
+      Parameters:
+        ProjectName:
+          Ref: ProjectName
+        NamePrefix:
+          Ref: NamePrefix
+        Environment:
+          Ref: Environment
+        VpcCidr:
+          Ref: VpcCidr
+        PublicSubnet1Cidr:
+          Ref: PublicSubnet1Cidr
+        PublicSubnet2Cidr:
+          Ref: PublicSubnet2Cidr
+        PrivateSubnet1Cidr:
+          Ref: PrivateSubnet1Cidr
+        PrivateSubnet2Cidr:
+          Ref: PrivateSubnet2Cidr
+        AvailabilityZone1:
+          Ref: AvailabilityZone1
+        AvailabilityZone2:
+          Ref: AvailabilityZone2
+        EnableNatGateway:
+          Ref: EnableNatGateway
+        EksClusterName:
+          Ref: EksClusterName
+        EnableDnsHostnames:
+          Ref: EnableDnsHostnames
+        EnableDnsSupport:
+          Ref: EnableDnsSupport
+        InternetRouteCidr:
+          Ref: InternetRouteCidr
+        ManagedByTag:
+          Ref: ManagedByTag
+        VpcNameSuffix:
+          Ref: VpcNameSuffix
+        InternetGatewayNameSuffix:
+          Ref: InternetGatewayNameSuffix
+        PublicSubnetNameSuffix:
+          Ref: PublicSubnetNameSuffix
+        PrivateSubnetNameSuffix:
+          Ref: PrivateSubnetNameSuffix
+        PublicRouteTableNameSuffix:
+          Ref: PublicRouteTableNameSuffix
+        PrivateRouteTableNameSuffix:
+          Ref: PrivateRouteTableNameSuffix
+        NatEipNameSuffix:
+          Ref: NatEipNameSuffix
+        NatGatewayNameSuffix:
+          Ref: NatGatewayNameSuffix
+        PublicSubnetTierTag:
+          Ref: PublicSubnetTierTag
+        PrivateSubnetTierTag:
+          Ref: PrivateSubnetTierTag
+        AlbSubnetRoleTag:
+          Ref: AlbSubnetRoleTag
+        ClusterSubnetTagValue:
+          Ref: ClusterSubnetTagValue
+  Bastion:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateBastion
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/7741af201cb952738bcaba1f09dcf277.template
+      Parameters:
+        NamePrefix:
+          Ref: NamePrefix
+        BastionEnabled:
+          Ref: BastionEnabled
+        BastionAssociateEip:
+          Ref: BastionAssociateEip
+        BastionInstanceType:
+          Ref: BastionInstanceType
+        BastionAmiSsmParameter:
+          Ref: BastionAmiSsmParameter
+        BastionRootVolumeSize:
+          Ref: BastionRootVolumeSize
+        BastionRootVolumeType:
+          Ref: BastionRootVolumeType
+        BastionRootDeviceName:
+          Ref: BastionRootDeviceName
+        Ec2KeyName:
+          Fn::If:
+          - CreateNewEc2KeyPair
+          - Ref: GeneratedEc2KeyPair
+          - Ref: ExistingEc2KeyName
+        BastionSshCidrs:
+          Fn::Join:
+          - ','
+          - Ref: BastionSshCidrs
+        TcpProtocol:
+          Ref: TcpProtocol
+        AllTrafficProtocol:
+          Ref: AllTrafficProtocol
+        BastionNameSuffix:
+          Ref: BastionNameSuffix
+        BastionEipNameSuffix:
+          Ref: BastionEipNameSuffix
+        BastionSshPort:
+          Ref: BastionSshPort
+        BastionEgressCidr:
+          Ref: BastionEgressCidr
+        BastionSecurityGroupDescription:
+          Ref: BastionSecurityGroupDescription
+        BastionEgressDescription:
+          Ref: BastionEgressDescription
+        BastionRoleTag:
+          Ref: BastionRoleTag
+        BastionMetadataEndpoint:
+          Ref: BastionMetadataEndpoint
+        BastionMetadataTokens:
+          Ref: BastionMetadataTokens
+        BastionMetadataHopLimit:
+          Ref: BastionMetadataHopLimit
+        BastionRootVolumeEncrypted:
+          Ref: BastionRootVolumeEncrypted
+        BastionRootVolumeDeleteOnTermination:
+          Ref: BastionRootVolumeDeleteOnTermination
+        EksNodesSshIngressDescription:
+          Ref: EksNodesSshIngressDescription
+        VpcId:
+          Fn::GetAtt:
+          - Network
+          - Outputs.VpcId
+        PublicSubnetId:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PublicSubnet1Id
+  Eks:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateNewEksCluster
+    DependsOn:
+    - Network
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/2fc1d7e045fa0418afea4662ff6ed071.template
+      Parameters:
+        ProjectName:
+          Ref: ProjectName
+        NamePrefix:
+          Ref: NamePrefix
+        Environment:
+          Ref: Environment
+        VpcCidr:
+          Ref: VpcCidr
+        AvailabilityZone1:
+          Ref: AvailabilityZone1
+        AvailabilityZone2:
+          Ref: AvailabilityZone2
+        BastionEnabled:
+          Ref: BastionEnabled
+        EksClusterName:
+          Ref: EksClusterName
+        EksClusterVersion:
+          Ref: EksClusterVersion
+        EksNodeInstanceType:
+          Ref: EksNodeInstanceType
+        EksNodeDesiredSize:
+          Ref: EksNodeDesiredSize
+        EksNodeMinSize:
+          Ref: EksNodeMinSize
+        EksNodeMaxSize:
+          Ref: EksNodeMaxSize
+        EksNodeDiskSize:
+          Ref: EksNodeDiskSize
+        EksNodeAmiType:
+          Ref: EksNodeAmiType
+        EksNodeCapacityType:
+          Ref: EksNodeCapacityType
+        EksAddonResolveConflicts:
+          Ref: EksAddonResolveConflicts
+        EksAuthenticationMode:
+          Ref: EksAuthenticationMode
+        EksBootstrapCreatorAdmin:
+          Ref: EksBootstrapCreatorAdmin
+        EksClusterRoleNameSuffix:
+          Ref: EksClusterRoleNameSuffix
+        EksNodeRoleNameSuffix:
+          Ref: EksNodeRoleNameSuffix
+        EksClusterRoleAssumeService:
+          Ref: EksClusterRoleAssumeService
+        EksNodeRoleAssumeService:
+          Ref: EksNodeRoleAssumeService
+        EksClusterPolicyArn:
+          Ref: EksClusterPolicyArn
+        EksVpcResourceControllerPolicyArn:
+          Ref: EksVpcResourceControllerPolicyArn
+        EksNodeWorkerPolicyArn:
+          Ref: EksNodeWorkerPolicyArn
+        EksNodeCniPolicyArn:
+          Ref: EksNodeCniPolicyArn
+        EksNodeEcrPolicyArn:
+          Ref: EksNodeEcrPolicyArn
+        EksNodeDiskType:
+          Ref: EksNodeDiskType
+        EksNodeDeviceName:
+          Ref: EksNodeDeviceName
+        EksNodeVolumeEncrypted:
+          Ref: EksNodeVolumeEncrypted
+        EksNodeVolumeDeleteOnTermination:
+          Ref: EksNodeVolumeDeleteOnTermination
+        EksNodeMetadataEndpoint:
+          Ref: EksNodeMetadataEndpoint
+        EksNodeMetadataTokens:
+          Ref: EksNodeMetadataTokens
+        EksNodeMetadataHopLimit:
+          Ref: EksNodeMetadataHopLimit
+        EksNodeLaunchTemplateSuffix:
+          Ref: EksNodeLaunchTemplateSuffix
+        EksNodeInstanceNameSuffix:
+          Ref: EksNodeInstanceNameSuffix
+        EksNodeGroupNamePrefix:
+          Ref: EksNodeGroupNamePrefix
+        EksNodeGroupTagNameSuffix:
+          Ref: EksNodeGroupTagNameSuffix
+        EksNodeUpdateMaxUnavailable:
+          Ref: EksNodeUpdateMaxUnavailable
+        EksAddonVpcCniName:
+          Ref: EksAddonVpcCniName
+        EksAddonKubeProxyName:
+          Ref: EksAddonKubeProxyName
+        EksAddonCoreDnsName:
+          Ref: EksAddonCoreDnsName
+        EksNodesSecurityGroupDescription:
+          Ref: EksNodesSecurityGroupDescription
+        EksNodesSecurityGroupNameSuffix:
+          Ref: EksNodesSecurityGroupNameSuffix
+        EksClusterTagKeyPrefix:
+          Ref: EksClusterTagKeyPrefix
+        EksClusterTagValue:
+          Ref: EksClusterTagValue
+        AlbControllerNamespace:
+          Ref: AlbControllerNamespace
+        AlbControllerServiceAccountName:
+          Ref: AlbControllerServiceAccountName
+        AlbControllerIamPolicyNameSuffix:
+          Ref: AlbControllerIamPolicyNameSuffix
+        AlbControllerVersion:
+          Ref: AlbControllerVersion
+        VpcId:
+          Fn::GetAtt:
+          - Network
+          - Outputs.VpcId
+        PrivateSubnet1Id:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PrivateSubnet1Id
+        PrivateSubnet2Id:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PrivateSubnet2Id
+        BastionSecurityGroupId:
+          Fn::If:
+          - CreateBastion
+          - Fn::GetAtt:
+            - Bastion
+            - Outputs.BastionSecurityGroupId
+          - ''
+  Alb:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateNewEksCluster
+    DependsOn:
+    - Network
+    - Eks
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/5ab8a67ea44f94789f140573eb26e48e.template
+      Parameters:
+        ProjectName:
+          Ref: ProjectName
+        NamePrefix:
+          Ref: NamePrefix
+        Environment:
+          Ref: Environment
+        VpcId:
+          Fn::GetAtt:
+          - Network
+          - Outputs.VpcId
+        PublicSubnet1Id:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PublicSubnet1Id
+        PublicSubnet2Id:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PublicSubnet2Id
+        PrivateSubnet1Id:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PrivateSubnet1Id
+        PrivateSubnet2Id:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PrivateSubnet2Id
+        EksClusterName:
+          Ref: EksClusterName
+        NodesSecurityGroupId:
+          Fn::GetAtt:
+          - Eks
+          - Outputs.EksClusterSecurityGroupId
+        AlbName:
+          Ref: AlbName
+        AlbTargetGroupName:
+          Ref: AlbTargetGroupName
+        AlbListenerPort:
+          Ref: AlbListenerPort
+        AlbTargetPort:
+          Ref: AlbTargetPort
+        AlbHealthCheckPath:
+          Ref: AlbHealthCheckPath
+        NodeGroup1Name:
+          Fn::GetAtt:
+          - Eks
+          - Outputs.EksNodeGroup1Name
+        NodeGroup2Name:
+          Fn::GetAtt:
+          - Eks
+          - Outputs.EksNodeGroup2Name
+  SpendSmart:
+    Type: AWS::CloudFormation::Stack
+    Condition: InstallSpendSmart
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/1f46785436985ee89cc9cf97641d1d0b.template
+      Parameters:
+        ClusterName:
+          Fn::If:
+          - UseExistingEksCluster
+          - Ref: ExistingEksClusterName
+          - Fn::GetAtt:
+            - Eks
+            - Outputs.EksClusterName
+        ClusterSecurityGroupId:
+          Fn::If:
+          - UseExistingEksCluster
+          - Ref: ExistingEksClusterSecurityGroupId
+          - Fn::GetAtt:
+            - Eks
+            - Outputs.EksClusterSecurityGroupId
+        VpcId:
+          Fn::If:
+          - UseExistingEksCluster
+          - Ref: ExistingEksVpcId
+          - Fn::GetAtt:
+            - Network
+            - Outputs.VpcId
+        PrivateSubnetId:
+          Fn::If:
+          - UseExistingEksCluster
+          - Ref: ExistingEksPrivateSubnetId
+          - Fn::GetAtt:
+            - Network
+            - Outputs.PrivateSubnet1Id
+        InstallAlbController:
+          Fn::If:
+          - CreateNewEksCluster
+          - 'true'
+          - 'false'
+        ChartRepository: https://github.com/OT-CONTAINER-KIT/helm-charts.git
+        ChartBranch: feature/spendsmart-helm-chart
+        Namespace: spendsmart
+        ValuesS3Uri:
+          Ref: SpendSmartValuesS3Uri
+        ValuesS3ObjectArn:
+          Ref: SpendSmartValuesS3ObjectArn
+        AlbScheme:
+          Ref: SpendSmartAlbScheme
+        AlbControllerVersion:
+          Ref: AlbControllerVersion
+        AlbControllerChartVersion:
+          Ref: AlbControllerChartVersion
+  S3:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/6d417da527733ebfd1b57c6938a49f5b.template
+      Parameters:
+        ProjectName:
+          Ref: ProjectName
+        Environment:
+          Ref: Environment
+        S3BucketName:
+          Ref: S3BucketName
+        DataPrefix:
+          Ref: DataPrefix
+        AthenaResultsPrefix:
+          Ref: AthenaResultsPrefix
+        AthenaResultsExpirationDays:
+          Ref: AthenaResultsExpirationDays
+        AthenaLifecycleEnabled:
+          Ref: AthenaLifecycleEnabled
+        AthenaLifecycleStatus:
+          Ref: AthenaLifecycleStatus
+        S3VersioningEnabled:
+          Ref: S3VersioningEnabled
+        S3EncryptionAlgorithm:
+          Ref: S3EncryptionAlgorithm
+        S3KmsKeyArn:
+          Ref: S3KmsKeyArn
+        S3BucketKeyEnabled:
+          Ref: S3BucketKeyEnabled
+        S3BlockPublicAcls:
+          Ref: S3BlockPublicAcls
+        S3BlockPublicPolicy:
+          Ref: S3BlockPublicPolicy
+        S3IgnorePublicAcls:
+          Ref: S3IgnorePublicAcls
+        S3RestrictPublicBuckets:
+          Ref: S3RestrictPublicBuckets
+        AthenaLifecycleRuleId:
+          Ref: AthenaLifecycleRuleId
+  Glue:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/41be3066644c4deabd91d2c65bc63a66.template
+      Parameters:
+        NamePrefix:
+          Ref: NamePrefix
+        DataPrefix:
+          Ref: DataPrefix
+        GlueDatabaseName:
+          Ref: GlueDatabaseName
+        GlueRoleAssumeService:
+          Ref: GlueRoleAssumeService
+        GlueServiceRolePolicyArn:
+          Ref: GlueServiceRolePolicyArn
+        GlueDatabaseDescription:
+          Ref: GlueDatabaseDescription
+        GlueRoleNameSuffix:
+          Ref: GlueRoleNameSuffix
+        GlueS3PolicyNameSuffix:
+          Ref: GlueS3PolicyNameSuffix
+        BucketArn:
+          Fn::GetAtt:
+          - S3
+          - Outputs.BucketArn
+  Athena:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/0fee92b7b46f5bf7a9b34569d6a27413.template
+      Parameters:
+        AthenaResultsPrefix:
+          Ref: AthenaResultsPrefix
+        AthenaWorkgroupName:
+          Ref: AthenaWorkgroupName
+        AthenaBytesScannedCutoff:
+          Ref: AthenaBytesScannedCutoff
+        AthenaWorkgroupState:
+          Ref: AthenaWorkgroupState
+        AthenaEnforceWorkgroupConfiguration:
+          Ref: AthenaEnforceWorkgroupConfiguration
+        AthenaPublishCloudWatchMetrics:
+          Ref: AthenaPublishCloudWatchMetrics
+        AthenaResultEncryptionOption:
+          Ref: AthenaResultEncryptionOption
+        BucketName:
+          Fn::GetAtt:
+          - S3
+          - Outputs.BucketName
+  Iam:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/570bbcf858afd164e8ba4125a9ac6e69.template
+      Parameters:
+        ProjectName:
+          Ref: ProjectName
+        NamePrefix:
+          Ref: NamePrefix
+        Environment:
+          Ref: Environment
+        AnalyticsRoleNameSuffix:
+          Ref: AnalyticsRoleNameSuffix
+        AnalyticsPolicyNameSuffix:
+          Ref: AnalyticsPolicyNameSuffix
+        AnalyticsTrustedPrincipalArn:
+          Ref: AnalyticsTrustedPrincipalArn
+        AnalyticsPolicyDescription:
+          Ref: AnalyticsPolicyDescription
+Outputs:
+  Ec2KeyPairName:
+    Value:
+      Fn::If:
+      - CreateNewEc2KeyPair
+      - Ref: GeneratedEc2KeyPair
+      - Ref: ExistingEc2KeyName
+  GeneratedEc2KeyPairId:
+    Condition: CreateNewEc2KeyPair
+    Value:
+      Fn::GetAtt:
+      - GeneratedEc2KeyPair
+      - KeyPairId
+  GeneratedEc2PrivateKeyParameter:
+    Condition: CreateNewEc2KeyPair
+    Value:
+      Fn::Sub:
+      - /ec2/keypair/${KeyPairId}
+      - KeyPairId:
+          Fn::GetAtt:
+          - GeneratedEc2KeyPair
+          - KeyPairId
+  VpcId:
+    Value:
+      Fn::If:
+      - UseExistingEksCluster
+      - Ref: ExistingEksVpcId
+      - Fn::GetAtt:
+        - Network
+        - Outputs.VpcId
+  VpcCidr:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Network
+      - Outputs.VpcCidr
+  PublicSubnet1Id:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Network
+      - Outputs.PublicSubnet1Id
+  PublicSubnet2Id:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Network
+      - Outputs.PublicSubnet2Id
+  PrivateSubnet1Id:
+    Value:
+      Fn::If:
+      - UseExistingEksCluster
+      - Ref: ExistingEksPrivateSubnetId
+      - Fn::GetAtt:
+        - Network
+        - Outputs.PrivateSubnet1Id
+  PrivateSubnet2Id:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Network
+      - Outputs.PrivateSubnet2Id
+  InternetGatewayId:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Network
+      - Outputs.InternetGatewayId
+  BastionInstanceId:
+    Condition: CreateBastion
+    Value:
+      Fn::GetAtt:
+      - Bastion
+      - Outputs.BastionInstanceId
+  BastionSecurityGroupId:
+    Condition: CreateBastion
+    Value:
+      Fn::GetAtt:
+      - Bastion
+      - Outputs.BastionSecurityGroupId
+  SshKeyPairName:
+    Value:
+      Fn::If:
+      - CreateNewEc2KeyPair
+      - Ref: GeneratedEc2KeyPair
+      - Ref: ExistingEc2KeyName
+  BastionPublicIp:
+    Condition: CreateBastion
+    Value:
+      Fn::GetAtt:
+      - Bastion
+      - Outputs.BastionPublicIp
+  EksClusterName:
+    Value:
+      Fn::If:
+      - UseExistingEksCluster
+      - Ref: ExistingEksClusterName
+      - Fn::GetAtt:
+        - Eks
+        - Outputs.EksClusterName
+  EksClusterEndpoint:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Eks
+      - Outputs.EksClusterEndpoint
+  EksClusterArn:
+    Value:
+      Fn::If:
+      - UseExistingEksCluster
+      - Fn::Sub: arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ExistingEksClusterName}
+      - Fn::GetAtt:
+        - Eks
+        - Outputs.EksClusterArn
+  EksClusterSecurityGroupId:
+    Value:
+      Fn::If:
+      - UseExistingEksCluster
+      - Ref: ExistingEksClusterSecurityGroupId
+      - Fn::GetAtt:
+        - Eks
+        - Outputs.EksClusterSecurityGroupId
+  EksNodesSecurityGroupId:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Eks
+      - Outputs.EksNodesSecurityGroupId
+  EksNodeGroupNames:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Eks
+      - Outputs.EksNodeGroupNames
+  EksConfigureKubectl:
+    Value:
+      Fn::If:
+      - UseExistingEksCluster
+      - Fn::Sub: aws eks update-kubeconfig --region ${AWS::Region} --name ${ExistingEksClusterName}
+      - Fn::GetAtt:
+        - Eks
+        - Outputs.EksConfigureKubectl
+  AlbControllerRoleArn:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Eks
+      - Outputs.AlbControllerRoleArn
+  AlbControllerNamespace:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Eks
+      - Outputs.AlbControllerNamespace
+  AlbControllerServiceAccountName:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Eks
+      - Outputs.AlbControllerServiceAccountName
+  AlbControllerVersion:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Eks
+      - Outputs.AlbControllerVersion
+  SpendSmartDeploymentHostId:
+    Condition: InstallSpendSmart
+    Value:
+      Fn::GetAtt:
+      - SpendSmart
+      - Outputs.DeploymentHostId
+  SpendSmartNamespace:
+    Condition: InstallSpendSmart
+    Value:
+      Fn::GetAtt:
+      - SpendSmart
+      - Outputs.Namespace
+  SpendSmartIngressName:
+    Condition: InstallSpendSmart
+    Value:
+      Fn::GetAtt:
+      - SpendSmart
+      - Outputs.IngressName
+  BucketName:
+    Value:
+      Fn::GetAtt:
+      - S3
+      - Outputs.BucketName
+  DataLocation:
+    Value:
+      Fn::GetAtt:
+      - S3
+      - Outputs.DataLocation
+  AthenaOutputLocation:
+    Value:
+      Fn::GetAtt:
+      - S3
+      - Outputs.AthenaOutputLocation
+  GlueDatabaseName:
+    Value:
+      Fn::GetAtt:
+      - Glue
+      - Outputs.GlueDatabaseName
+  GlueRoleArn:
+    Value:
+      Fn::GetAtt:
+      - Glue
+      - Outputs.GlueRoleArn
+  AthenaWorkgroupName:
+    Value:
+      Fn::GetAtt:
+      - Athena
+      - Outputs.AthenaWorkgroupName
+  AnalyticsIamRoleName:
+    Value:
+      Fn::GetAtt:
+      - Iam
+      - Outputs.AnalyticsIamRoleName
+  AnalyticsIamRoleArn:
+    Value:
+      Fn::GetAtt:
+      - Iam
+      - Outputs.AnalyticsIamRoleArn
+  AnalyticsIamPolicyName:
+    Value:
+      Fn::GetAtt:
+      - Iam
+      - Outputs.AnalyticsIamPolicyName
+  AnalyticsIamPolicyArn:
+    Value:
+      Fn::GetAtt:
+      - Iam
+      - Outputs.AnalyticsIamPolicyArn
+  PublicSubnetIds:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::Sub:
+      - '{"${Zone1}":"${Subnet1}","${Zone2}":"${Subnet2}"}'
+      - Zone1:
+          Fn::If:
+          - UseDefaultAz1
+          - Fn::Select:
+            - 0
+            - Fn::GetAZs: ''
+          - Ref: AvailabilityZone1
+        Zone2:
+          Fn::If:
+          - UseDefaultAz2
+          - Fn::Select:
+            - 1
+            - Fn::GetAZs: ''
+          - Ref: AvailabilityZone2
+        Subnet1:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PublicSubnet1Id
+        Subnet2:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PublicSubnet2Id
+  PrivateSubnetIds:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::Sub:
+      - '{"${Zone1}":"${Subnet1}","${Zone2}":"${Subnet2}"}'
+      - Zone1:
+          Fn::If:
+          - UseDefaultAz1
+          - Fn::Select:
+            - 0
+            - Fn::GetAZs: ''
+          - Ref: AvailabilityZone1
+        Zone2:
+          Fn::If:
+          - UseDefaultAz2
+          - Fn::Select:
+            - 1
+            - Fn::GetAZs: ''
+          - Ref: AvailabilityZone2
+        Subnet1:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PrivateSubnet1Id
+        Subnet2:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PrivateSubnet2Id
+  NatGatewayIds:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Network
+      - Outputs.NatGatewayIds
+  BucketArn:
+    Value:
+      Fn::GetAtt:
+      - S3
+      - Outputs.BucketArn

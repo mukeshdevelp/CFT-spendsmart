@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SpendSmart s3 nested stack
+Parameters:
+  # project nmae
+  ProjectName:
+    Type: String
+    Default: spendsmart
+
+  Environment:
+    Type: String
+    Default: dev
+
+  S3BucketName:
+    Type: String
+    Default: athena-results-spendsmart-dev
+    Description: Must be globally unique. Change if this bucket name is already taken.
+
+  DataPrefix:
+    Type: String
+    Default: data
+  
+  AthenaResultsPrefix:
+    Type: String
+    Default: athena-results
+
+  AthenaResultsExpirationDays:
+    Type: Number
+    Default: 30
+
+  AthenaLifecycleEnabled:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  AthenaLifecycleStatus:
+    Type: String
+    AllowedValues: [Enabled, Disabled]
+    Default: Enabled
+
+  S3VersioningEnabled:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  S3EncryptionAlgorithm:
+    Type: String
+    AllowedValues: [AES256, aws:kms]
+    Default: AES256
+  S3KmsKeyArn:
+    Type: String
+    Default: ''
+  S3BucketKeyEnabled:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  S3BlockPublicAcls:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  S3BlockPublicPolicy:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  S3IgnorePublicAcls:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  S3RestrictPublicBuckets:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  AthenaLifecycleRuleId:
+    Type: String
+    Default: expire-athena-results
+Conditions:
+  AthenaLifecycleActive: !And
+    - !Condition AthenaLifecycleRequested
+    - !Not [!Condition AthenaLifecycleDaysZero]
+  AthenaLifecycleDaysZero: !Equals [!Ref AthenaResultsExpirationDays, '0']
+  AthenaLifecycleRequested: !Equals [!Ref AthenaLifecycleEnabled, 'true']
+  S3RestrictPublicBucketsCondition: !Equals [!Ref S3RestrictPublicBuckets, 'true']
+  S3IgnorePublicAclsCondition: !Equals [!Ref S3IgnorePublicAcls, 'true']
+  S3BlockPublicPolicyCondition: !Equals [!Ref S3BlockPublicPolicy, 'true']
+  S3BlockPublicAclsCondition: !Equals [!Ref S3BlockPublicAcls, 'true']
+  S3BucketKeyEnabledCondition: !Equals [!Ref S3BucketKeyEnabled, 'true']
+  S3UsesKms: !Equals [!Ref S3EncryptionAlgorithm, aws:kms]
+  S3VersioningEnabledCondition: !Equals [!Ref S3VersioningEnabled, 'true']
+Resources:
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Ref S3BucketName
+      VersioningConfiguration:
+        Status: !If [S3VersioningEnabledCondition, Enabled, Suspended]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: !Ref S3EncryptionAlgorithm
+              KMSMasterKeyID: !If [S3UsesKms, !Ref S3KmsKeyArn, !Ref 'AWS::NoValue']
+            BucketKeyEnabled: !If [S3UsesKms, !If [S3BucketKeyEnabledCondition, true, false], !Ref 'AWS::NoValue']
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: !If [S3BlockPublicAclsCondition, true, false]
+        BlockPublicPolicy: !If [S3BlockPublicPolicyCondition, true, false]
+        IgnorePublicAcls: !If [S3IgnorePublicAclsCondition, true, false]
+        RestrictPublicBuckets: !If [S3RestrictPublicBucketsCondition, true, false]
+      LifecycleConfiguration: !If
+        - AthenaLifecycleActive
+        - Rules:
+            - Id: !Ref AthenaLifecycleRuleId
+              Status: !Ref AthenaLifecycleStatus
+              Prefix: !Sub '${AthenaResultsPrefix}/'
+              ExpirationInDays: !Ref AthenaResultsExpirationDays
+        - !Ref 'AWS::NoValue'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  BucketName:
+    Value: !Ref DataBucket
+  DataLocation:
+    Value: !Sub 's3://${DataBucket}/${DataPrefix}/'
+  AthenaOutputLocation:
+    Value: !Sub 's3://${DataBucket}/${AthenaResultsPrefix}/'
+  BucketArn:
+    Value: !GetAtt DataBucket.Arn

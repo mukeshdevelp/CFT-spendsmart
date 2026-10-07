@@ -1,0 +1,198 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SpendSmart bastion nested stack
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: spendsmart-dev
+
+  BastionEnabled:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  BastionAssociateEip:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  BastionInstanceType:
+    Type: String
+    Default: t3.micro
+
+  BastionAmiSsmParameter:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+  BastionRootVolumeSize:
+    Type: Number
+    Default: 8
+    
+  BastionRootVolumeType:
+    Type: String
+    Default: gp3
+
+  BastionRootDeviceName:
+    Type: String
+    Default: /dev/xvda
+
+  Ec2KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair in the deployment region.
+    
+
+  BastionSshCidrs:
+    Type: CommaDelimitedList
+    Default: '0.0.0.0/0,103.87.45.139/32'
+    Description: CIDR allowlist for SSH to the bastion. Including 0.0.0.0/0 permits SSH from any IPv4 address.
+
+  TcpProtocol:
+    Type: String
+    Default: tcp
+  AllTrafficProtocol:
+    Type: String
+    Default: '-1'
+
+  BastionNameSuffix:
+    Type: String
+    Default: -bastion
+
+  BastionEipNameSuffix:
+    Type: String
+    Default: -bastion-eip
+
+  BastionSshPort:
+    Type: Number
+    Default: 22
+
+  BastionEgressCidr:
+    Type: String
+    Default: 0.0.0.0/0
+
+  BastionSecurityGroupDescription:
+    Type: String
+    Default: Bastion host in a public subnet
+
+  BastionEgressDescription:
+    Type: String
+    Default: Bastion egress
+
+  BastionRoleTag:
+    Type: String
+    Default: bastion
+
+  BastionMetadataEndpoint:
+    Type: String
+    AllowedValues: [enabled, disabled]
+    Default: enabled
+
+  BastionMetadataTokens:
+    Type: String
+    AllowedValues: [required, optional]
+    Default: required
+
+  BastionMetadataHopLimit:
+    Type: Number
+    Default: 2
+
+  BastionRootVolumeEncrypted:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  BastionRootVolumeDeleteOnTermination:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  EksNodesSshIngressDescription:
+    Type: String
+    Default: SSH from bastion
+  VpcId:
+    Type: String
+  PublicSubnetId:
+    Type: String
+Conditions:
+  CreateBastionEip: !And
+    - !Condition CreateBastion
+    - !Equals [!Ref BastionAssociateEip, 'true']
+  CreateBastion: !Equals [!Ref BastionEnabled, 'true']
+  BastionRootDeleteOnTermination: !Equals [!Ref BastionRootVolumeDeleteOnTermination, 'true']
+  BastionRootEncrypted: !Equals [!Ref BastionRootVolumeEncrypted, 'true']
+Resources:
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: CreateBastion
+    Properties:
+      GroupDescription: !Ref BastionSecurityGroupDescription
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: !Ref TcpProtocol
+          FromPort: !Ref BastionSshPort
+          ToPort: !Ref BastionSshPort
+          CidrIp: !Select [0, !Ref BastionSshCidrs]
+          Description: !Ref EksNodesSshIngressDescription
+        - IpProtocol: !Ref TcpProtocol
+          FromPort: !Ref BastionSshPort
+          ToPort: !Ref BastionSshPort
+          CidrIp: !Select [1, !Ref BastionSshCidrs]
+          Description: !Ref EksNodesSshIngressDescription
+      SecurityGroupEgress:
+        - IpProtocol: !Ref AllTrafficProtocol
+          CidrIp: !Ref BastionEgressCidr
+          Description: !Ref BastionEgressDescription
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${BastionNameSuffix}'
+  BastionInstance:
+    Type: AWS::EC2::Instance
+    Condition: CreateBastion
+    Properties:
+      ImageId: !Ref BastionAmiSsmParameter
+      InstanceType: !Ref BastionInstanceType
+      KeyName: !Ref Ec2KeyName
+      SubnetId: !Ref PublicSubnetId
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      MetadataOptions:
+        HttpEndpoint: !Ref BastionMetadataEndpoint
+        HttpTokens: !Ref BastionMetadataTokens
+        HttpPutResponseHopLimit: !Ref BastionMetadataHopLimit
+      BlockDeviceMappings:
+        - DeviceName: !Ref BastionRootDeviceName
+          Ebs:
+            VolumeSize: !Ref BastionRootVolumeSize
+            VolumeType: !Ref BastionRootVolumeType
+            Encrypted: !If [BastionRootEncrypted, true, false]
+            DeleteOnTermination: !If [BastionRootDeleteOnTermination, true, false]
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${BastionNameSuffix}'
+        - Key: Role
+          Value: !Ref BastionRoleTag
+  BastionEip:
+    Type: AWS::EC2::EIP
+    Condition: CreateBastionEip
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${BastionEipNameSuffix}'
+  BastionEipAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Condition: CreateBastionEip
+    Properties:
+      InstanceId: !Ref BastionInstance
+      EIP: !Ref BastionEip
+
+Outputs:
+  BastionInstanceId:
+    Condition: CreateBastion
+    Value: !Ref BastionInstance
+  BastionSecurityGroupId:
+    Condition: CreateBastion
+    Value: !Ref BastionSecurityGroup
+  SshKeyPairName:
+    Value: !Ref Ec2KeyName
+  BastionPublicIp:
+    Condition: CreateBastion
+    Value: !If [CreateBastionEip, !Ref BastionEip, !GetAtt BastionInstance.PublicIp]

@@ -1,0 +1,234 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Installs the SpendSmart Helm chart and an ALB Ingress into EKS
+Parameters:
+  ClusterName:
+    Type: String
+  ClusterSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PrivateSubnetId:
+    Type: AWS::EC2::Subnet::Id
+  Namespace:
+    Type: String
+    Default: spendsmart
+  ChartRepository:
+    Type: String
+    Default: https://github.com/OT-CONTAINER-KIT/helm-charts.git
+  ChartBranch:
+    Type: String
+    Default: feature/spendsmart-helm-chart
+  ValuesS3Uri:
+    Type: String
+    Default: ''
+  ValuesS3ObjectArn:
+    Type: String
+    Default: ''
+  AlbScheme:
+    Type: String
+    AllowedValues: [internet-facing, internal]
+    Default: internet-facing
+  AlbControllerVersion:
+    Type: String
+    Default: v2.11.0
+  AlbControllerChartVersion:
+    Type: String
+    Default: 1.11.0
+  InstallAlbController:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  DeploymentInstanceType:
+    Type: String
+    Default: t3.small
+  DeploymentAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+Conditions:
+  HasValuesS3Object: !Not [!Equals [!Ref ValuesS3ObjectArn, '']]
+Resources:
+  DeploymentSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SpendSmart deployment host with no inbound access
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-deployment'
+
+  DeploymentHostToClusterApi:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ClusterSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref DeploymentSecurityGroup
+      Description: HTTPS from the SpendSmart deployment host to the EKS API
+
+  DeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: SpendSmartDeployment
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: eks:DescribeCluster
+                Resource: !Sub 'arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}'
+              - Effect: Allow
+                Action: cloudformation:SignalResource
+                Resource: !Ref AWS::StackId
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-deployment'
+
+  DeploymentInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref DeploymentRole
+
+  DeploymentValuesReadPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasValuesS3Object
+    Properties:
+      PolicyName: SpendSmartValuesRead
+      Roles:
+        - !Ref DeploymentRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: s3:GetObject
+            Resource: !Ref ValuesS3ObjectArn
+
+  DeploymentAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Properties:
+      ClusterName: !Ref ClusterName
+      PrincipalArn: !GetAtt DeploymentRole.Arn
+      Type: STANDARD
+      AccessPolicies:
+        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+          AccessScope:
+            Type: cluster
+
+  DeploymentHost:
+    Type: AWS::EC2::Instance
+    DependsOn: DeploymentAccessEntry
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT60M
+    Properties:
+      ImageId: !Ref DeploymentAmi
+      InstanceType: !Ref DeploymentInstanceType
+      IamInstanceProfile:
+        Arn: !GetAtt DeploymentInstanceProfile.Arn
+      SubnetId: !Ref PrivateSubnetId
+      SecurityGroupIds:
+        - !Ref DeploymentSecurityGroup
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 2
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -Eeuo pipefail
+          trap 'status=$?; aws cloudformation signal-resource --stack-name ${AWS::StackName} --logical-resource-id DeploymentHost --unique-id spendsmart-deployer --status "$([ "$status" -eq 0 ] && echo SUCCESS || echo FAILURE)" --region ${AWS::Region} || true' EXIT
+
+          dnf install -y git tar gzip curl
+          curl -fsSL https://get.helm.sh/helm-v3.17.3-linux-amd64.tar.gz -o /tmp/helm.tar.gz
+          tar -xzf /tmp/helm.tar.gz -C /tmp
+          install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+
+          cluster_version=$(aws eks describe-cluster --name ${ClusterName} --region ${AWS::Region} --query 'cluster.version' --output text)
+          curl -fsSL "https://dl.k8s.io/release/v$cluster_version.0/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
+          chmod 0755 /usr/local/bin/kubectl
+          aws eks update-kubeconfig --name ${ClusterName} --region ${AWS::Region}
+
+          if [ '${InstallAlbController}' = 'true' ]; then
+            helm repo add eks https://aws.github.io/eks-charts
+            helm repo update
+            helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+              --version ${AlbControllerChartVersion} \
+              --namespace kube-system --create-namespace \
+              --set clusterName=${ClusterName} \
+              --set region=${AWS::Region} \
+              --set vpcId=${VpcId} \
+              --set serviceAccount.create=true \
+              --set serviceAccount.name=aws-load-balancer-controller
+          fi
+          kubectl rollout status deployment/aws-load-balancer-controller -n kube-system --timeout=10m
+
+          git clone --depth 1 --branch ${ChartBranch} ${ChartRepository} /opt/helm-charts
+          values_args=()
+          if [ -n '${ValuesS3Uri}' ]; then
+            aws s3 cp '${ValuesS3Uri}' /tmp/spendsmart-values.yaml
+            values_args+=(--values /tmp/spendsmart-values.yaml)
+          fi
+          if [ -n '${ValuesS3Uri}' ]; then
+            helm upgrade --install spendsmart /opt/helm-charts/charts/spendsmart \
+              --namespace ${Namespace} --create-namespace \
+              --set-string frontend.service.type=NodePort \
+              --values /tmp/spendsmart-values.yaml
+          else
+            helm upgrade --install spendsmart /opt/helm-charts/charts/spendsmart \
+              --namespace ${Namespace} --create-namespace \
+              --set-string frontend.service.type=NodePort
+          fi
+
+          kubectl apply -f - <<'INGRESS'
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: spendsmart
+            namespace: ${Namespace}
+            annotations:
+              alb.ingress.kubernetes.io/scheme: ${AlbScheme}
+              alb.ingress.kubernetes.io/target-type: instance
+              alb.ingress.kubernetes.io/healthcheck-path: /
+              alb.ingress.kubernetes.io/success-codes: 200-399
+              alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+          spec:
+            ingressClassName: alb
+            rules:
+              - http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: spendsmart-frontend
+                          port:
+                            number: 80
+          INGRESS
+          kubectl wait --for=jsonpath='{.status.loadBalancer.ingress}' ingress/spendsmart -n ${Namespace} --timeout=10m
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-deployment'
+
+Outputs:
+  DeploymentHostId:
+    Value: !Ref DeploymentHost
+  IngressName:
+    Value: spendsmart
+  Namespace:
+    Value: !Ref Namespace
+  AlbControllerVersion:
+    Value: !Ref AlbControllerVersion

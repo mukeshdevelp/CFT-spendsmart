@@ -1,0 +1,356 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SpendSmart network-skeleton nested stack
+Parameters:
+  ProjectName:
+    Type: String
+    Default: spendsmart
+
+  NamePrefix:
+    Type: String
+    Default: spendsmart-dev
+
+  Environment:
+    Type: String
+    Default: dev
+
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.0.0.0/24
+
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.0.1.0/24
+
+  PrivateSubnet1Cidr:
+    Type: String
+    Default: 10.0.2.0/24
+
+  PrivateSubnet2Cidr:
+    Type: String
+    Default: 10.0.3.0/24
+
+  AvailabilityZone1:
+    Type: String
+    Default: ''
+    Description: Optional AZ override. Empty selects the first available AZ.
+
+  AvailabilityZone2:
+    Type: String
+    Default: ''
+    Description: Optional AZ override. Empty selects the second available AZ.
+
+  EnableNatGateway:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    
+  EksClusterName:
+    Type: String
+    Default: spendsmart
+
+  EnableDnsHostnames:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  EnableDnsSupport:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  InternetRouteCidr:
+    Type: String
+    Default: 0.0.0.0/0
+
+  ManagedByTag:
+    Type: String
+    Default: CFT
+
+  VpcNameSuffix:
+    Type: String
+    Default: -vpc
+
+  InternetGatewayNameSuffix:
+    Type: String
+    Default: -igw
+
+  PublicSubnetNameSuffix:
+    Type: String
+    Default: -public-
+
+  PrivateSubnetNameSuffix:
+    Type: String
+    Default: -private-
+
+  PublicRouteTableNameSuffix:
+    Type: String
+    Default: -public-rt
+
+  PrivateRouteTableNameSuffix:
+    Type: String
+    Default: -private-rt-
+
+  NatEipNameSuffix:
+    Type: String
+    Default: -nat-eip-
+
+  NatGatewayNameSuffix:
+    Type: String
+    Default: -nat-
+
+  PublicSubnetTierTag:
+    Type: String
+    Default: public
+
+  PrivateSubnetTierTag:
+    Type: String
+    Default: private
+
+  AlbSubnetRoleTag:
+    Type: String
+    Default: '1'
+
+  ClusterSubnetTagValue:
+    Type: String
+    Default: shared
+
+Conditions:
+  NatEnabled: !Equals [!Ref EnableNatGateway, 'true']
+  UseDefaultAz1: !Equals [!Ref AvailabilityZone1, '']
+  UseDefaultAz2: !Equals [!Ref AvailabilityZone2, '']
+  DnsSupportEnabled: !Equals [!Ref EnableDnsSupport, 'true']
+  DnsHostnamesEnabled: !Equals [!Ref EnableDnsHostnames, 'true']
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: !If [DnsHostnamesEnabled, true, false]
+      EnableDnsSupport: !If [DnsSupportEnabled, true, false]
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${VpcNameSuffix}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedByTag
+        
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${InternetGatewayNameSuffix}'
+
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnet1Cidr
+      AvailabilityZone: !If [UseDefaultAz1, !Select [0, !GetAZs ''], !Ref AvailabilityZone1]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${PublicSubnetNameSuffix}1'
+        - Key: Tier
+          Value: !Ref PublicSubnetTierTag
+        - Key: kubernetes.io/role/elb
+          Value: !Ref AlbSubnetRoleTag
+        - Key: !Sub 'kubernetes.io/cluster/${EksClusterName}'
+          Value: !Ref ClusterSubnetTagValue
+
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnet2Cidr
+      AvailabilityZone: !If [UseDefaultAz2, !Select [1, !GetAZs ''], !Ref AvailabilityZone2]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${PublicSubnetNameSuffix}2'
+        - Key: Tier
+          Value: !Ref PublicSubnetTierTag
+        - Key: kubernetes.io/role/elb
+          Value: !Ref AlbSubnetRoleTag
+        - Key: !Sub 'kubernetes.io/cluster/${EksClusterName}'
+          Value: !Ref ClusterSubnetTagValue
+
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PrivateSubnet1Cidr
+      AvailabilityZone: !If [UseDefaultAz1, !Select [0, !GetAZs ''], !Ref AvailabilityZone1]
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${PrivateSubnetNameSuffix}1'
+        - Key: Tier
+          Value: !Ref PrivateSubnetTierTag
+        - Key: kubernetes.io/role/internal-elb
+          Value: !Ref AlbSubnetRoleTag
+        - Key: !Sub 'kubernetes.io/cluster/${EksClusterName}'
+          Value: !Ref ClusterSubnetTagValue
+
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PrivateSubnet2Cidr
+      AvailabilityZone: !If [UseDefaultAz2, !Select [1, !GetAZs ''], !Ref AvailabilityZone2]
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${PrivateSubnetNameSuffix}2'
+        - Key: Tier
+          Value: !Ref PrivateSubnetTierTag
+        - Key: kubernetes.io/role/internal-elb
+          Value: !Ref AlbSubnetRoleTag
+        - Key: !Sub 'kubernetes.io/cluster/${EksClusterName}'
+          Value: !Ref ClusterSubnetTagValue
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${PublicRouteTableNameSuffix}'
+
+  PublicInternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: !Ref InternetRouteCidr
+      GatewayId: !Ref InternetGateway
+  PublicSubnet1RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnet2RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  NatEip1:
+    Type: AWS::EC2::EIP
+    Condition: NatEnabled
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${NatEipNameSuffix}1'
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Condition: NatEnabled
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      AllocationId: !GetAtt NatEip1.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${NatGatewayNameSuffix}1'
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Condition: NatEnabled
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${PrivateRouteTableNameSuffix}1'
+  PrivateNatRoute1:
+    Type: AWS::EC2::Route
+    Condition: NatEnabled
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: !Ref InternetRouteCidr
+      NatGatewayId: !Ref NatGateway1
+  PrivateSubnet1RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !If [NatEnabled, !Ref PrivateRouteTable1, !Ref PublicRouteTable]
+  PrivateSubnet2RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !If [NatEnabled, !Ref PrivateRouteTable1, !Ref PublicRouteTable]
+
+Outputs:
+  VpcId:
+    Description: Terraform output vpc_id
+    Value: !Ref Vpc
+  PublicSubnetIds:
+    Description: Terraform output public_subnet_ids; JSON-encoded AZ-to-subnet map
+    Value: !Sub
+      - '{"${Zone1}":"${Subnet1}","${Zone2}":"${Subnet2}"}'
+      - Zone1: !If [UseDefaultAz1, !Select [0, !GetAZs ''], !Ref AvailabilityZone1]
+        Zone2: !If [UseDefaultAz2, !Select [1, !GetAZs ''], !Ref AvailabilityZone2]
+        Subnet1: !Ref PublicSubnet1
+        Subnet2: !Ref PublicSubnet2
+  PrivateSubnetIds:
+    Description: Terraform output private_subnet_ids; JSON-encoded AZ-to-subnet map
+    Value: !Sub
+      - '{"${Zone1}":"${Subnet1}","${Zone2}":"${Subnet2}"}'
+      - Zone1: !If [UseDefaultAz1, !Select [0, !GetAZs ''], !Ref AvailabilityZone1]
+        Zone2: !If [UseDefaultAz2, !Select [1, !GetAZs ''], !Ref AvailabilityZone2]
+        Subnet1: !Ref PrivateSubnet1
+        Subnet2: !Ref PrivateSubnet2
+  PublicSubnet1Id:
+    Description: Public subnet 1 ID
+    Value: !Ref PublicSubnet1
+
+  PublicSubnet2Id:
+    Description: Public subnet 2 ID
+    Value: !Ref PublicSubnet2
+
+  PrivateSubnet1Id:
+    Description: Private subnet 1 ID
+    Value: !Ref PrivateSubnet1
+
+  PrivateSubnet2Id:
+    Description: Private subnet 2 ID
+    Value: !Ref PrivateSubnet2
+    
+  VpcCidr:
+    Description: Terraform output vpc_cidr
+    Value: !GetAtt Vpc.CidrBlock
+  NatGatewayIds:
+    Description: Terraform output nat_gateway_ids; JSON-encoded AZ-to-NAT map
+    Value: !If
+      - NatEnabled
+      - !Sub
+        - '{"${Zone1}":"${Nat1}"}'
+        - Zone1: !If [UseDefaultAz1, !Select [0, !GetAZs ''], !Ref AvailabilityZone1]
+          Nat1: !Ref NatGateway1
+      - '{}'
+  InternetGatewayId:
+    Description: Terraform output internet_gateway_id
+    Value: !Ref InternetGateway
+  PublicSubnet1Id:
+    Value: !Ref PublicSubnet1
+  PublicSubnet2Id:
+    Value: !Ref PublicSubnet2
+  PrivateSubnet1Id:
+    Value: !Ref PrivateSubnet1
+  PrivateSubnet2Id:
+    Value: !Ref PrivateSubnet2

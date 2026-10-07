@@ -1,0 +1,60 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SpendSmart athena nested stack
+Parameters:
+  AthenaResultsPrefix:
+    Type: String
+    Default: athena-results
+
+  AthenaWorkgroupName:
+    Type: String
+    Default: spendsmart
+
+  AthenaBytesScannedCutoff:
+    Type: Number
+    Default: 10737418240
+
+  AthenaWorkgroupState:
+    Type: String
+    AllowedValues: [ENABLED, DISABLED]
+    Default: ENABLED
+
+  AthenaEnforceWorkgroupConfiguration:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  AthenaPublishCloudWatchMetrics:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+
+  AthenaResultEncryptionOption:
+    Type: String
+    AllowedValues: [SSE_S3, SSE_KMS, CSE_KMS]
+    Default: SSE_S3
+
+  BucketName:
+    Type: String
+Conditions:
+  AthenaPublishMetrics: !Equals [!Ref AthenaPublishCloudWatchMetrics, 'true']
+
+# resources section
+  AthenaEnforceConfiguration: !Equals [!Ref AthenaEnforceWorkgroupConfiguration, 'true']
+Resources:
+  AthenaWorkgroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Ref AthenaWorkgroupName
+      State: !Ref AthenaWorkgroupState
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: !If [AthenaEnforceConfiguration, true, false]
+        PublishCloudWatchMetricsEnabled: !If [AthenaPublishMetrics, true, false]
+        BytesScannedCutoffPerQuery: !Ref AthenaBytesScannedCutoff
+        ResultConfiguration:
+          OutputLocation: !Sub 's3://${BucketName}/${AthenaResultsPrefix}/'
+          EncryptionConfiguration:
+            EncryptionOption: !Ref AthenaResultEncryptionOption
+
+Outputs:
+  AthenaWorkgroupName:
+    Value: !Ref AthenaWorkgroup

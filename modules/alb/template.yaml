@@ -1,0 +1,242 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SpendSmart Application Load Balancer with automatic node registration
+
+Parameters:
+  ProjectName:
+    Type: String
+  NamePrefix:
+    Type: String
+  Environment:
+    Type: String
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PublicSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+  PublicSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+  PrivateSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+  PrivateSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+  EksClusterName:
+    Type: String
+  NodeGroup1Name:
+    Type: String
+    Description: Name of the first managed node group.
+  NodeGroup2Name:
+    Type: String
+    Description: Name of the second managed node group.
+  NodesSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group attached to the worker nodes (use the EKS cluster security group).
+  AlbName:
+    Type: String
+  AlbTargetGroupName:
+    Type: String
+  AlbListenerPort:
+    Type: Number
+  AlbTargetPort:
+    Type: Number
+  AlbHealthCheckPath:
+    Type: String
+
+Resources:
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} ALB security group'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref AlbListenerPort
+          ToPort: !Ref AlbListenerPort
+          CidrIp: 0.0.0.0/0
+          Description: HTTP from internet
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: ALB outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-alb-sg'
+
+  # Lets the ALB reach the NodePort on the worker nodes
+  AlbToNodesIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref NodesSecurityGroupId
+      IpProtocol: tcp
+      FromPort: !Ref AlbTargetPort
+      ToPort: !Ref AlbTargetPort
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+      Description: ALB to SpendSmart NodePort
+
+  SpendSmartAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Ref AlbName
+      Type: application
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Subnets:
+        - !Ref PublicSubnet1Id
+        - !Ref PublicSubnet2Id
+      Tags:
+        - Key: Name
+          Value: !Ref AlbName
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  SpendSmartTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Ref AlbTargetGroupName
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: !Ref AlbTargetPort
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: traffic-port
+      HealthCheckPath: !Ref AlbHealthCheckPath
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      Matcher:
+        HttpCode: '200-399'
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-target-group'
+
+  SpendSmartAlbListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref SpendSmartAlb
+      Port: !Ref AlbListenerPort
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref SpendSmartTargetGroup
+
+  # ---------------------------------------------------------------
+  # Target registration: attach the node groups' Auto Scaling groups
+  # to the target group. The ASG then registers/deregisters instances
+  # automatically as nodes are launched or replaced.
+  # ---------------------------------------------------------------
+  TargetRegistrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: attach-nodegroup-asg-to-target-group
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - eks:DescribeNodegroup
+                  - autoscaling:DescribeAutoScalingGroups
+                  - autoscaling:DescribeLoadBalancerTargetGroups
+                  - autoscaling:AttachLoadBalancerTargetGroups
+                  - autoscaling:DetachLoadBalancerTargetGroups
+                  - elasticloadbalancing:DescribeTargetGroups
+                Resource: '*'
+
+  TargetRegistrationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Attaches EKS managed node group ASGs to the ALB target group
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 300
+      Role: !GetAtt TargetRegistrationRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          eks = boto3.client('eks')
+          asg = boto3.client('autoscaling')
+
+
+          def asg_names(cluster, groups):
+              names = []
+              for g in groups:
+                  ng = eks.describe_nodegroup(
+                      clusterName=cluster, nodegroupName=g)['nodegroup']
+                  names += [a['name'] for a in ng['resources']['autoScalingGroups']]
+              return names
+
+
+          def attach(cluster, groups, tg):
+              for name in asg_names(cluster, groups):
+                  asg.attach_load_balancer_target_groups(
+                      AutoScalingGroupName=name, TargetGroupARNs=[tg])
+
+
+          def detach(cluster, groups, tg):
+              try:
+                  for name in asg_names(cluster, groups):
+                      asg.detach_load_balancer_target_groups(
+                          AutoScalingGroupName=name, TargetGroupARNs=[tg])
+              except Exception as e:  # node group or ASG may already be gone
+                  print('detach skipped:', e)
+
+
+          def handler(event, context):
+              try:
+                  p = event['ResourceProperties']
+                  req = event['RequestType']
+                  if req == 'Create':
+                      attach(p['ClusterName'], p['NodeGroupNames'], p['TargetGroupArn'])
+                  elif req == 'Update':
+                      old = event.get('OldResourceProperties', {})
+                      if old.get('TargetGroupArn') and old['TargetGroupArn'] != p['TargetGroupArn']:
+                          detach(old['ClusterName'], old['NodeGroupNames'], old['TargetGroupArn'])
+                      attach(p['ClusterName'], p['NodeGroupNames'], p['TargetGroupArn'])
+                  elif req == 'Delete':
+                      detach(p['ClusterName'], p['NodeGroupNames'], p['TargetGroupArn'])
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                  print('error:', e)
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+  TargetRegistration:
+    Type: Custom::TargetGroupRegistration
+    DependsOn:
+      - SpendSmartTargetGroup
+      - SpendSmartAlbListener
+    Properties:
+      ServiceToken: !GetAtt TargetRegistrationFunction.Arn
+      ClusterName: !Ref EksClusterName
+      TargetGroupArn: !Ref SpendSmartTargetGroup
+      NodeGroupNames:
+        - !Ref NodeGroup1Name
+        - !Ref NodeGroup2Name
+
+Outputs:
+  AlbDnsName:
+    Description: SpendSmart ALB DNS name
+    Value: !GetAtt SpendSmartAlb.DNSName
+  AlbArn:
+    Description: SpendSmart ALB ARN
+    Value: !Ref SpendSmartAlb
+  TargetGroupArn:
+    Description: SpendSmart target group ARN
+    Value: !Ref SpendSmartTargetGroup
+  AlbSecurityGroupId:
+    Description: SpendSmart ALB security group
+    Value: !Ref AlbSecurityGroup

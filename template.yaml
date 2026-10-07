@@ -1,0 +1,1627 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  SpendSmart network, bastion, EKS, ALB, S3, Glue, Athena, and analytics IAM
+  infrastructure translated from the Terraform configuration.
+
+# Parameters sections
+Parameters:
+
+  ProjectName:
+    Type: String
+    Default: spendsmart
+
+  NamePrefix:
+    Type: String
+    Default: spendsmart-dev
+
+  Environment:
+    Type: String
+    Default: dev
+
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.0.0.0/24
+
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.0.1.0/24
+
+  PrivateSubnet1Cidr:
+    Type: String
+    Default: 10.0.2.0/24
+
+  PrivateSubnet2Cidr:
+    Type: String
+    Default: 10.0.3.0/24
+
+  AvailabilityZone1:
+    Type: String
+    Default: ''
+    Description: Optional AZ override. Empty selects the first available AZ.
+
+  AvailabilityZone2:
+    Type: String
+    Default: ''
+    Description: Optional AZ override. Empty selects the second available AZ.
+
+  EnableNatGateway:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    
+  BastionEnabled:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  BastionAssociateEip:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  BastionInstanceType:
+    Type: String
+    Default: t3.micro
+
+  BastionAmiSsmParameter:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+  BastionRootVolumeSize:
+    Type: Number
+    Default: 8
+    
+  BastionRootVolumeType:
+    Type: String
+    Default: gp3
+
+  BastionRootDeviceName:
+    Type: String
+    Default: /dev/xvda
+
+  Ec2KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair in the deployment region.
+
+  BastionSshCidrs:
+    Type: CommaDelimitedList
+    Default: '0.0.0.0/0,103.87.45.139/32'
+    Description: CIDR allowlist for SSH to the bastion. Including 0.0.0.0/0 permits SSH from any IPv4 address.
+
+  EksClusterName:
+    Type: String
+    Default: spendsmart
+
+  EksClusterVersion:
+    Type: String
+    Default: '1.36'
+
+  EksEndpointPrivateAccess:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  EksEndpointPublicAccess:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+
+  EksNodeInstanceType:
+    Type: String
+    Default: c7i-flex.large
+
+  EksNodeDesiredSize:
+    Type: Number
+    Default: 1
+
+  EksNodeMinSize:
+    Type: Number
+    Default: 1
+
+  EksNodeMaxSize:
+    Type: Number
+    Default: 1
+
+  EksNodeDiskSize:
+    Type: Number
+    Default: 48
+
+  EksNodeAmiType:
+    Type: String
+    Default: AL2023_x86_64_STANDARD
+
+  EksNodeCapacityType:
+    Type: String
+    AllowedValues: [ON_DEMAND]
+    Default: ON_DEMAND
+
+  EksNodesEgressCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: Allows node bootstrap and the Load Balancer Controller to reach AWS APIs through NAT; narrow with VPC endpoints if desired.
+
+  S3BucketName:
+    Type: String
+    Default: athena-results-spendsmart-dev
+    Description: Must be globally unique. Change if this bucket name is already taken.
+
+  DataPrefix:
+    Type: String
+    Default: data
+
+  AthenaResultsPrefix:
+    Type: String
+    Default: athena-results
+
+  AthenaResultsExpirationDays:
+    Type: Number
+    Default: 30
+
+  GlueDatabaseName:
+    Type: String
+    Default: spendsmart_analytics
+  AthenaWorkgroupName:
+    Type: String
+    Default: spendsmart
+
+  AthenaBytesScannedCutoff:
+    Type: Number
+    Default: 10737418240
+
+  AthenaWorkgroupState:
+    Type: String
+    AllowedValues: [ENABLED, DISABLED]
+    Default: ENABLED
+
+  AthenaEnforceWorkgroupConfiguration:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  AthenaPublishCloudWatchMetrics:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+
+  AthenaResultEncryptionOption:
+    Type: String
+    AllowedValues: [SSE_S3, SSE_KMS, CSE_KMS]
+    Default: SSE_S3
+
+  AthenaLifecycleEnabled:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  AthenaLifecycleStatus:
+    Type: String
+    AllowedValues: [Enabled, Disabled]
+    Default: Enabled
+
+  GlueRoleAssumeService:
+    Type: String
+    Default: glue.amazonaws.com
+
+  GlueServiceRolePolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+
+  EnableDnsHostnames:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  EnableDnsSupport:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  InternetRouteCidr:
+    Type: String
+    Default: 0.0.0.0/0
+
+  TcpProtocol:
+    Type: String
+    Default: tcp
+  AllTrafficProtocol:
+    Type: String
+    Default: '-1'
+
+  ManagedByTag:
+    Type: String
+    Default: CFT
+
+  VpcNameSuffix:
+    Type: String
+    Default: -vpc
+
+  InternetGatewayNameSuffix:
+    Type: String
+    Default: -igw
+
+  PublicSubnetNameSuffix:
+    Type: String
+    Default: -public-
+
+  PrivateSubnetNameSuffix:
+    Type: String
+    Default: -private-
+
+  PublicRouteTableNameSuffix:
+    Type: String
+    Default: -public-rt
+
+  PrivateRouteTableNameSuffix:
+    Type: String
+    Default: -private-rt-
+
+  NatEipNameSuffix:
+    Type: String
+    Default: -nat-eip-
+
+  NatGatewayNameSuffix:
+    Type: String
+    Default: -nat-
+
+  BastionNameSuffix:
+    Type: String
+    Default: -bastion
+
+  BastionEipNameSuffix:
+    Type: String
+    Default: -bastion-eip
+
+  EksAddonResolveConflicts:
+    Type: String
+    AllowedValues: [NONE, OVERWRITE, PRESERVE]
+    Default: OVERWRITE
+
+  PublicSubnetTierTag:
+    Type: String
+    Default: public
+
+  PrivateSubnetTierTag:
+    Type: String
+    Default: private
+
+  AlbSubnetRoleTag:
+    Type: String
+    Default: '1'
+
+  ClusterSubnetTagValue:
+    Type: String
+    Default: shared
+
+  BastionSshPort:
+    Type: Number
+    Default: 22
+
+  BastionEgressCidr:
+    Type: String
+    Default: 0.0.0.0/0
+
+  BastionSecurityGroupDescription:
+    Type: String
+    Default: Bastion host in a public subnet
+
+  BastionEgressDescription:
+    Type: String
+    Default: Bastion egress
+
+  BastionRoleTag:
+    Type: String
+    Default: bastion
+
+  BastionMetadataEndpoint:
+    Type: String
+    AllowedValues: [enabled, disabled]
+    Default: enabled
+
+  BastionMetadataTokens:
+    Type: String
+    AllowedValues: [required, optional]
+    Default: required
+
+  BastionMetadataHopLimit:
+    Type: Number
+    Default: 2
+
+  BastionRootVolumeEncrypted:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  BastionRootVolumeDeleteOnTermination:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  EksAuthenticationMode:
+    Type: String
+    AllowedValues: [API, API_AND_CONFIG_MAP, CONFIG_MAP]
+    Default: API_AND_CONFIG_MAP
+
+  EksBootstrapCreatorAdmin:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  EksClusterRoleNameSuffix:
+    Type: String
+    Default: -eks-cluster
+
+  EksNodeRoleNameSuffix:
+    Type: String
+    Default: -eks-nodes
+
+  EksClusterRoleAssumeService:
+    Type: String
+    Default: eks.amazonaws.com
+
+  EksNodeRoleAssumeService:
+    Type: String
+    Default: ec2.amazonaws.com
+
+  EksClusterPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+
+  EksVpcResourceControllerPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEKSVPCResourceController
+
+  EksNodeWorkerPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+
+  EksNodeCniPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+
+  EksNodeEcrPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+
+  EksNodeDiskType:
+    Type: String
+    Default: gp3
+
+  EksNodeDeviceName:
+    Type: String
+    Default: /dev/xvda
+
+  EksNodeVolumeEncrypted:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  EksNodeVolumeDeleteOnTermination:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+  EksNodeMetadataEndpoint:
+    Type: String
+    AllowedValues: [enabled, disabled]
+    Default: enabled
+
+  EksNodeMetadataTokens:
+    Type: String
+    AllowedValues: [required, optional]
+    Default: required
+    
+  EksNodeMetadataHopLimit:
+    Type: Number
+    Default: 2
+  EksNodeLaunchTemplateSuffix:
+    Type: String
+    Default: -ng
+  EksNodeInstanceNameSuffix:
+    Type: String
+    Default: -eks-node
+  EksNodeGroupNamePrefix:
+    Type: String
+    Default: node-group-
+  EksNodeGroupTagNameSuffix:
+    Type: String
+    Default: -node-group-
+  EksNodeUpdateMaxUnavailable:
+    Type: Number
+    Default: 1
+  EksAddonVpcCniName:
+    Type: String
+    Default: vpc-cni
+  EksAddonKubeProxyName:
+    Type: String
+    Default: kube-proxy
+  EksAddonCoreDnsName:
+    Type: String
+    Default: coredns
+  EksNodesSecurityGroupDescription:
+    Type: String
+    Default: Additional security group for EKS worker nodes
+  EksNodesSecurityGroupNameSuffix:
+    Type: String
+    Default: -eks-nodes
+  EksClusterTagKeyPrefix:
+    Type: String
+    Default: kubernetes.io/cluster/
+  EksClusterTagValue:
+    Type: String
+    Default: owned
+  EksNodesSshIngressDescription:
+    Type: String
+    Default: SSH from bastion
+  EksNodesEgressDescription:
+    Type: String
+    Default: Node egress
+  AlbControllerNamespace:
+    Type: String
+    Default: kube-system
+  AlbControllerServiceAccountName:
+    Type: String
+    Default: aws-load-balancer-controller
+  AlbControllerIamPolicyNameSuffix:
+    Type: String
+    Default: -aws-load-balancer-controller
+  AlbControllerVersion:
+    Type: String
+    Default: v2.11.0
+    Description: AWS Load Balancer Controller release; keep its Helm chart and IAM policy versions aligned.
+  S3VersioningEnabled:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  S3EncryptionAlgorithm:
+    Type: String
+    AllowedValues: [AES256, aws:kms]
+    Default: AES256
+  S3KmsKeyArn:
+    Type: String
+    Default: ''
+  S3BucketKeyEnabled:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  S3BlockPublicAcls:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  S3BlockPublicPolicy:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  S3IgnorePublicAcls:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  S3RestrictPublicBuckets:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+  AthenaLifecycleRuleId:
+    Type: String
+    Default: expire-athena-results
+  GlueDatabaseDescription:
+    Type: String
+    Default: SpendSmart analytics catalog
+  GlueRoleNameSuffix:
+    Type: String
+    Default: -glue
+  GlueS3PolicyNameSuffix:
+    Type: String
+    Default: -glue-s3
+  AnalyticsRoleNameSuffix:
+    Type: String
+    Default: -analytics-role
+  AnalyticsPolicyNameSuffix:
+    Type: String
+    Default: -analytics-policy
+  AnalyticsTrustedPrincipalArn:
+    Type: String
+    Default: ''
+    Description: Principal ARN allowed to assume the analytics role. Empty trusts the current account root.
+  AnalyticsPolicyDescription:
+    Type: String
+    Default: Analytics, cost, AWS infrastructure and service metadata access
+
+  # ALB
+  AlbNameSuffix:
+    Type: String
+    Default: -alb
+  AlbScheme:
+    Type: String
+    AllowedValues: [internet-facing, internal]
+    Default: internet-facing
+  AlbIngressCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to reach the ALB listener. Restrict in prod.
+  AlbListenerPort:
+    Type: Number
+    Default: 80
+  AlbTargetPort:
+    Type: Number
+    Default: 30080
+    Description: Container port the pods listen on.
+  EksNodeDesiredSize:
+    Type: Number
+    Default: 1
+
+  EksNodeMinSize:
+    Type: Number
+    Default: 1
+    
+  AlbHealthCheckPath:
+    Type: String
+    Default: /healthz
+  AlbDeletionProtection:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+
+  EksNodeAmiSsmParameter:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/eks/optimized-ami/1.36/amazon-linux-2023/x86_64/standard/recommended/image_id
+    Description: EKS-optimized AL2023 AMI. The version in the path must match EksClusterVersion.
+  
+  EksServiceCidr:
+    Type: String
+    Default: 172.20.0.0/16
+    Description: Cluster service CIDR (EKS default for a 10.x VPC).
+Conditions:
+  UseDefaultAz1: !Equals [!Ref AvailabilityZone1, '']
+  UseDefaultAz2: !Equals [!Ref AvailabilityZone2, '']
+  DnsHostnamesEnabled: !Equals [!Ref EnableDnsHostnames, 'true']
+  DnsSupportEnabled: !Equals [!Ref EnableDnsSupport, 'true']
+  NatEnabled: !Equals [!Ref EnableNatGateway, 'true']
+  CreateBastion: !Equals [!Ref BastionEnabled, 'true']
+  CreateBastionEip: !And
+    - !Condition CreateBastion
+    - !Equals [!Ref BastionAssociateEip, 'true']
+  BastionRootEncrypted: !Equals [!Ref BastionRootVolumeEncrypted, 'true']
+  BastionRootDeleteOnTermination: !Equals [!Ref BastionRootVolumeDeleteOnTermination, 'true']
+  EksBootstrapAdminEnabled: !Equals [!Ref EksBootstrapCreatorAdmin, 'true']
+  EksPrivateEndpointEnabled: !Equals [!Ref EksEndpointPrivateAccess, 'true']
+  EksPublicEndpointEnabled: !Equals [!Ref EksEndpointPublicAccess, 'true']
+  EksNodeVolumeEncryptedCondition: !Equals [!Ref EksNodeVolumeEncrypted, 'true']
+  EksNodeVolumeDeleteCondition: !Equals [!Ref EksNodeVolumeDeleteOnTermination, 'true']
+  S3VersioningEnabledCondition: !Equals [!Ref S3VersioningEnabled, 'true']
+  S3BucketKeyEnabledCondition: !Equals [!Ref S3BucketKeyEnabled, 'true']
+  S3BlockPublicAclsCondition: !Equals [!Ref S3BlockPublicAcls, 'true']
+  S3BlockPublicPolicyCondition: !Equals [!Ref S3BlockPublicPolicy, 'true']
+  S3IgnorePublicAclsCondition: !Equals [!Ref S3IgnorePublicAcls, 'true']
+  S3RestrictPublicBucketsCondition: !Equals [!Ref S3RestrictPublicBuckets, 'true']
+  UseDefaultAnalyticsPrincipal: !Equals [!Ref AnalyticsTrustedPrincipalArn, '']
+  S3UsesKms: !Equals [!Ref S3EncryptionAlgorithm, aws:kms]
+  AthenaLifecycleRequested: !Equals [!Ref AthenaLifecycleEnabled, 'true']
+  AthenaLifecycleDaysZero: !Equals [!Ref AthenaResultsExpirationDays, '0']
+  AthenaLifecycleActive: !And
+    - !Condition AthenaLifecycleRequested
+    - !Not [!Condition AthenaLifecycleDaysZero]
+  AthenaEnforceConfiguration: !Equals [!Ref AthenaEnforceWorkgroupConfiguration, 'true']
+  AthenaPublishMetrics: !Equals [!Ref AthenaPublishCloudWatchMetrics, 'true']
+
+# resources section
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: !If [DnsHostnamesEnabled, true, false]
+      EnableDnsSupport: !If [DnsSupportEnabled, true, false]
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${VpcNameSuffix}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedByTag
+        
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${InternetGatewayNameSuffix}'
+
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnet1Cidr
+      AvailabilityZone: !If [UseDefaultAz1, !Select [0, !GetAZs ''], !Ref AvailabilityZone1]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${PublicSubnetNameSuffix}1'
+        - Key: Tier
+          Value: !Ref PublicSubnetTierTag
+        - Key: kubernetes.io/role/elb
+          Value: !Ref AlbSubnetRoleTag
+        - Key: !Sub 'kubernetes.io/cluster/${EksClusterName}'
+          Value: !Ref ClusterSubnetTagValue
+
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnet2Cidr
+      AvailabilityZone: !If [UseDefaultAz2, !Select [1, !GetAZs ''], !Ref AvailabilityZone2]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${PublicSubnetNameSuffix}2'
+        - Key: Tier
+          Value: !Ref PublicSubnetTierTag
+        - Key: kubernetes.io/role/elb
+          Value: !Ref AlbSubnetRoleTag
+        - Key: !Sub 'kubernetes.io/cluster/${EksClusterName}'
+          Value: !Ref ClusterSubnetTagValue
+
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PrivateSubnet1Cidr
+      AvailabilityZone: !If [UseDefaultAz1, !Select [0, !GetAZs ''], !Ref AvailabilityZone1]
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${PrivateSubnetNameSuffix}1'
+        - Key: Tier
+          Value: !Ref PrivateSubnetTierTag
+        - Key: kubernetes.io/role/internal-elb
+          Value: !Ref AlbSubnetRoleTag
+        - Key: !Sub 'kubernetes.io/cluster/${EksClusterName}'
+          Value: !Ref ClusterSubnetTagValue
+
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PrivateSubnet2Cidr
+      AvailabilityZone: !If [UseDefaultAz2, !Select [1, !GetAZs ''], !Ref AvailabilityZone2]
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${PrivateSubnetNameSuffix}2'
+        - Key: Tier
+          Value: !Ref PrivateSubnetTierTag
+        - Key: kubernetes.io/role/internal-elb
+          Value: !Ref AlbSubnetRoleTag
+        - Key: !Sub 'kubernetes.io/cluster/${EksClusterName}'
+          Value: !Ref ClusterSubnetTagValue
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${PublicRouteTableNameSuffix}'
+
+  PublicInternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: !Ref InternetRouteCidr
+      GatewayId: !Ref InternetGateway
+  PublicSubnet1RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnet2RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  NatEip1:
+    Type: AWS::EC2::EIP
+    Condition: NatEnabled
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${NatEipNameSuffix}1'
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Condition: NatEnabled
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      AllocationId: !GetAtt NatEip1.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${NatGatewayNameSuffix}1'
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Condition: NatEnabled
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${PrivateRouteTableNameSuffix}1'
+  PrivateNatRoute1:
+    Type: AWS::EC2::Route
+    Condition: NatEnabled
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: !Ref InternetRouteCidr
+      NatGatewayId: !Ref NatGateway1
+  PrivateSubnet1RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !If [NatEnabled, !Ref PrivateRouteTable1, !Ref PublicRouteTable]
+  PrivateSubnet2RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !If [NatEnabled, !Ref PrivateRouteTable1, !Ref PublicRouteTable]
+
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: CreateBastion
+    Properties:
+      GroupDescription: !Ref BastionSecurityGroupDescription
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: !Ref TcpProtocol
+          FromPort: !Ref BastionSshPort
+          ToPort: !Ref BastionSshPort
+          CidrIp: !Select [0, !Ref BastionSshCidrs]
+          Description: !Ref EksNodesSshIngressDescription
+        - IpProtocol: !Ref TcpProtocol
+          FromPort: !Ref BastionSshPort
+          ToPort: !Ref BastionSshPort
+          CidrIp: !Select [1, !Ref BastionSshCidrs]
+          Description: !Ref EksNodesSshIngressDescription
+      SecurityGroupEgress:
+        - IpProtocol: !Ref AllTrafficProtocol
+          CidrIp: !Ref BastionEgressCidr
+          Description: !Ref BastionEgressDescription
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${BastionNameSuffix}'
+  BastionInstance:
+    Type: AWS::EC2::Instance
+    Condition: CreateBastion
+    Properties:
+      ImageId: !Ref BastionAmiSsmParameter
+      InstanceType: !Ref BastionInstanceType
+      KeyName: !Ref Ec2KeyName
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      MetadataOptions:
+        HttpEndpoint: !Ref BastionMetadataEndpoint
+        HttpTokens: !Ref BastionMetadataTokens
+        HttpPutResponseHopLimit: !Ref BastionMetadataHopLimit
+      BlockDeviceMappings:
+        - DeviceName: !Ref BastionRootDeviceName
+          Ebs:
+            VolumeSize: !Ref BastionRootVolumeSize
+            VolumeType: !Ref BastionRootVolumeType
+            Encrypted: !If [BastionRootEncrypted, true, false]
+            DeleteOnTermination: !If [BastionRootDeleteOnTermination, true, false]
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${BastionNameSuffix}'
+        - Key: Role
+          Value: !Ref BastionRoleTag
+  BastionEip:
+    Type: AWS::EC2::EIP
+    Condition: CreateBastionEip
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${BastionEipNameSuffix}'
+  BastionEipAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Condition: CreateBastionEip
+    Properties:
+      InstanceId: !Ref BastionInstance
+      EIP: !Ref BastionEip
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB security group
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref AlbListenerPort
+          ToPort: !Ref AlbListenerPort
+          CidrIp: !Ref AlbIngressCidr
+          Description: Client access to ALB
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: !Ref AlbTargetPort
+          ToPort: !Ref AlbTargetPort
+          CidrIp: !Ref VpcCidr
+          Description: ALB to pods
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${AlbNameSuffix}-sg'
+
+  # Lets the ALB reach pods (pod ENIs use the node security group)
+  AlbToNodesIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EksNodesSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref AlbTargetPort
+      ToPort: !Ref AlbTargetPort
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+      Description: ALB to pods
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      Name: !Sub '${NamePrefix}${AlbNameSuffix}'
+      Type: application
+      Scheme: !Ref AlbScheme
+      IpAddressType: ipv4
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      LoadBalancerAttributes:
+        - Key: deletion_protection.enabled
+          Value: !Ref AlbDeletionProtection
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: 'true'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  AlbTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${NamePrefix}-tg'
+      VpcId: !Ref Vpc
+      Protocol: HTTP
+      Port: !Ref AlbTargetPort
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: traffic-port
+      HealthCheckPath: !Ref AlbHealthCheckPath
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200-399'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  AlbListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: !Ref AlbListenerPort
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AlbTargetGroup
+  EksClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}${EksClusterRoleNameSuffix}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: !Ref EksClusterRoleAssumeService
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref EksClusterPolicyArn
+        - !Ref EksVpcResourceControllerPolicyArn
+  EksNodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}${EksNodeRoleNameSuffix}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: !Ref EksNodeRoleAssumeService
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref EksNodeWorkerPolicyArn
+        - !Ref EksNodeCniPolicyArn
+        - !Ref EksNodeEcrPolicyArn
+
+  EksCluster:
+    Type: AWS::EKS::Cluster
+    DependsOn: [EksClusterRole]
+    Properties:
+      Name: !Ref EksClusterName
+      Version: !Ref EksClusterVersion
+      RoleArn: !GetAtt EksClusterRole.Arn
+      AccessConfig:
+        AuthenticationMode: !Ref EksAuthenticationMode
+        BootstrapClusterCreatorAdminPermissions: !If [EksBootstrapAdminEnabled, true, false]
+      BootstrapSelfManagedAddons: false
+      ResourcesVpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        EndpointPrivateAccess: true
+        EndpointPublicAccess: false
+      UpgradePolicy:
+        SupportType: STANDARD
+
+  EksAddonPodIdentityAgent:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref EksCluster
+      AddonName: eks-pod-identity-agent
+      ResolveConflicts: !Ref EksAddonResolveConflicts
+
+  EksNodesSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Ref EksNodesSecurityGroupDescription
+      VpcId: !Ref Vpc
+
+      SecurityGroupIngress:
+
+        # EKS control plane -> kubelet
+        - IpProtocol: tcp
+          FromPort: 10250
+          ToPort: 10250
+          CidrIp: !Ref VpcCidr
+
+          Description: EKS control plane to kubelet
+
+        # SSH from bastion
+        # SSH from bastion
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
+          Description: SSH from bastion
+
+
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Node egress
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${EksNodesSecurityGroupNameSuffix}'
+
+        - Key: !Sub '${EksClusterTagKeyPrefix}${EksClusterName}'
+          Value: !Ref EksClusterTagValue
+
+  EksNodesSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EksNodesSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref EksNodesSecurityGroup
+      Description: Node to node communication
+
+  EksNodeLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub '${NamePrefix}${EksNodeLaunchTemplateSuffix}'
+      LaunchTemplateData:
+        KeyName: !Ref Ec2KeyName
+        SecurityGroupIds:
+          
+          - !Ref EksNodesSecurityGroup
+          - !GetAtt EksCluster.ClusterSecurityGroupId
+        BlockDeviceMappings:
+          - DeviceName: !Ref EksNodeDeviceName
+            Ebs:
+              VolumeSize: !Ref EksNodeDiskSize
+              VolumeType: !Ref EksNodeDiskType
+              Encrypted: !If
+                - EksNodeVolumeEncryptedCondition
+                - true
+                - false
+              DeleteOnTermination: !If
+                - EksNodeVolumeDeleteCondition
+                - true
+                - false
+        MetadataOptions:
+          HttpEndpoint: !Ref EksNodeMetadataEndpoint
+          HttpTokens: !Ref EksNodeMetadataTokens
+          HttpPutResponseHopLimit: !Ref EksNodeMetadataHopLimit
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub '${NamePrefix}${EksNodeInstanceNameSuffix}'
+
+  EksNodeGroupAz1:
+    Type: AWS::EKS::Nodegroup
+
+    Properties:
+      ClusterName: !Ref EksCluster
+      NodegroupName: !Sub '${EksNodeGroupNamePrefix}1'
+      NodeRole: !GetAtt EksNodeRole.Arn
+
+      Subnets:
+        - !Ref PrivateSubnet1
+
+      InstanceTypes:
+        - !Ref EksNodeInstanceType
+
+      AmiType: !Ref EksNodeAmiType
+      CapacityType: !Ref EksNodeCapacityType
+
+      LaunchTemplate:
+        Id: !Ref EksNodeLaunchTemplate
+        Version: !GetAtt EksNodeLaunchTemplate.LatestVersionNumber
+
+      ScalingConfig:
+        DesiredSize: !Ref EksNodeDesiredSize
+        MinSize: !Ref EksNodeMinSize
+        MaxSize: !Ref EksNodeMaxSize
+
+      UpdateConfig:
+        MaxUnavailable: !Ref EksNodeUpdateMaxUnavailable
+
+      Labels:
+        spendsmart.io/az: !If
+          - UseDefaultAz1
+          - !Select [0, !GetAZs '']
+          - !Ref AvailabilityZone1
+
+      Tags:
+        Name: !Sub '${NamePrefix}${EksNodeGroupTagNameSuffix}1'
+
+    DependsOn:
+      - EksAddonVpcCni
+      - EksAddonKubeProxy
+      - EksAddonCoreDns
+
+    
+  EksNodeGroupAz2:
+    Type: AWS::EKS::Nodegroup
+    Properties:
+      ClusterName: !Ref EksCluster
+      NodegroupName: !Sub '${EksNodeGroupNamePrefix}2'
+      NodeRole: !GetAtt EksNodeRole.Arn
+      Subnets: [!Ref PrivateSubnet2]
+      InstanceTypes: [!Ref EksNodeInstanceType]
+      AmiType: !Ref EksNodeAmiType
+      CapacityType: !Ref EksNodeCapacityType
+      LaunchTemplate:
+        Id: !Ref EksNodeLaunchTemplate
+        Version: !GetAtt EksNodeLaunchTemplate.LatestVersionNumber
+      ScalingConfig:
+        DesiredSize: !Ref EksNodeDesiredSize
+        MinSize: !Ref EksNodeMinSize
+        MaxSize: !Ref EksNodeMaxSize
+      UpdateConfig:
+        MaxUnavailable: !Ref EksNodeUpdateMaxUnavailable
+      Labels:
+        spendsmart.io/az: !If [UseDefaultAz2, !Select [1, !GetAZs ''], !Ref AvailabilityZone2]
+      Tags:
+        Name: !Sub '${NamePrefix}${EksNodeGroupTagNameSuffix}2'
+
+  EksAddonVpcCni:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref EksCluster
+      AddonName: !Ref EksAddonVpcCniName
+      ResolveConflicts: !Ref EksAddonResolveConflicts
+  EksAddonKubeProxy:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref EksCluster
+      AddonName: !Ref EksAddonKubeProxyName
+      ResolveConflicts: !Ref EksAddonResolveConflicts
+  EksAddonCoreDns:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref EksCluster
+      AddonName: !Ref EksAddonCoreDnsName
+      ResolveConflicts: !Ref EksAddonResolveConflicts
+
+  AlbControllerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}${AlbControllerIamPolicyNameSuffix}-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+      Policies:
+        - PolicyName: !Sub '${NamePrefix}${AlbControllerIamPolicyNameSuffix}'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [iam:CreateServiceLinkedRole]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'iam:AWSServiceName': elasticloadbalancing.amazonaws.com
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeAccountAttributes
+                  - ec2:DescribeAddresses
+                  - ec2:DescribeAvailabilityZones
+                  - ec2:DescribeInternetGateways
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeVpcPeeringConnections
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeInstances
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeTags
+                  - ec2:GetCoipPoolUsage
+                  - ec2:DescribeCoipPools
+                  - ec2:GetSecurityGroupsForVpc
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DescribeLoadBalancerAttributes
+                  - elasticloadbalancing:DescribeListeners
+                  - elasticloadbalancing:DescribeListenerCertificates
+                  - elasticloadbalancing:DescribeSSLPolicies
+                  - elasticloadbalancing:DescribeRules
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetGroupAttributes
+                  - elasticloadbalancing:DescribeTargetHealth
+                  - elasticloadbalancing:DescribeTags
+                  - elasticloadbalancing:DescribeTrustStores
+                  - elasticloadbalancing:DescribeListenerAttributes
+                  - elasticloadbalancing:DescribeCapacityReservation
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - cognito-idp:DescribeUserPoolClient
+                  - acm:ListCertificates
+                  - acm:DescribeCertificate
+                  - iam:ListServerCertificates
+                  - iam:GetServerCertificate
+                  - waf-regional:GetWebACL
+                  - waf-regional:GetWebACLForResource
+                  - waf-regional:AssociateWebACL
+                  - waf-regional:DisassociateWebACL
+                  - wafv2:GetWebACL
+                  - wafv2:GetWebACLForResource
+                  - wafv2:AssociateWebACL
+                  - wafv2:DisassociateWebACL
+                  - shield:GetSubscriptionState
+                  - shield:DescribeProtection
+                  - shield:CreateProtection
+                  - shield:DeleteProtection
+                Resource: '*'
+              - Effect: Allow
+                Action: [ec2:AuthorizeSecurityGroupIngress, ec2:RevokeSecurityGroupIngress]
+                Resource: '*'
+              - Effect: Allow
+                Action: [ec2:CreateSecurityGroup]
+                Resource: '*'
+              - Effect: Allow
+                Action: [ec2:CreateTags]
+                Resource: !Sub 'arn:${AWS::Partition}:ec2:*:*:security-group/*'
+              - Effect: Allow
+                Action: [ec2:CreateTags, ec2:DeleteTags]
+                Resource: !Sub 'arn:${AWS::Partition}:ec2:*:*:security-group/*'
+              - Effect: Allow
+                Action: [ec2:AuthorizeSecurityGroupIngress, ec2:RevokeSecurityGroupIngress, ec2:DeleteSecurityGroup]
+                Resource: '*'
+              - Effect: Allow
+                Action: [elasticloadbalancing:CreateLoadBalancer, elasticloadbalancing:CreateTargetGroup]
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - elasticloadbalancing:CreateListener
+                  - elasticloadbalancing:DeleteListener
+                  - elasticloadbalancing:CreateRule
+                  - elasticloadbalancing:DeleteRule
+                Resource: '*'
+              - Effect: Allow
+                Action: [elasticloadbalancing:AddTags, elasticloadbalancing:RemoveTags]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:targetgroup/*/*'
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:loadbalancer/net/*/*'
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:loadbalancer/app/*/*'
+              - Effect: Allow
+                Action: [elasticloadbalancing:AddTags, elasticloadbalancing:RemoveTags]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:listener/net/*/*/*'
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:listener/app/*/*/*'
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:listener-rule/net/*/*/*'
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:listener-rule/app/*/*/*'
+              - Effect: Allow
+                Action:
+                  - elasticloadbalancing:ModifyLoadBalancerAttributes
+                  - elasticloadbalancing:SetIpAddressType
+                  - elasticloadbalancing:SetSecurityGroups
+                  - elasticloadbalancing:SetSubnets
+                  - elasticloadbalancing:DeleteLoadBalancer
+                  - elasticloadbalancing:ModifyTargetGroup
+                  - elasticloadbalancing:ModifyTargetGroupAttributes
+                  - elasticloadbalancing:DeleteTargetGroup
+                  - elasticloadbalancing:ModifyListenerAttributes
+                  - elasticloadbalancing:ModifyCapacityReservation
+                Resource: '*'
+              - Effect: Allow
+                Action: [elasticloadbalancing:AddTags]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:targetgroup/*/*'
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:loadbalancer/net/*/*'
+                  - !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:loadbalancer/app/*/*'
+              - Effect: Allow
+                Action: [elasticloadbalancing:RegisterTargets, elasticloadbalancing:DeregisterTargets]
+                Resource: !Sub 'arn:${AWS::Partition}:elasticloadbalancing:*:*:targetgroup/*/*'
+              - Effect: Allow
+                Action:
+                  - elasticloadbalancing:SetWebAcl
+                  - elasticloadbalancing:ModifyListener
+                  - elasticloadbalancing:AddListenerCertificates
+                  - elasticloadbalancing:RemoveListenerCertificates
+                  - elasticloadbalancing:ModifyRule
+                Resource: '*'
+  AlbControllerPodIdentityAssociation:
+    Type: AWS::EKS::PodIdentityAssociation
+    Properties:
+      ClusterName: !Ref EksCluster
+      Namespace: !Ref AlbControllerNamespace
+      ServiceAccount: !Ref AlbControllerServiceAccountName
+      RoleArn: !GetAtt AlbControllerRole.Arn
+
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref S3BucketName
+      VersioningConfiguration:
+        Status: !If [S3VersioningEnabledCondition, Enabled, Suspended]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: !Ref S3EncryptionAlgorithm
+              KMSMasterKeyID: !If [S3UsesKms, !Ref S3KmsKeyArn, !Ref 'AWS::NoValue']
+            BucketKeyEnabled: !If [S3UsesKms, !If [S3BucketKeyEnabledCondition, true, false], !Ref 'AWS::NoValue']
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: !If [S3BlockPublicAclsCondition, true, false]
+        BlockPublicPolicy: !If [S3BlockPublicPolicyCondition, true, false]
+        IgnorePublicAcls: !If [S3IgnorePublicAclsCondition, true, false]
+        RestrictPublicBuckets: !If [S3RestrictPublicBucketsCondition, true, false]
+      LifecycleConfiguration: !If
+        - AthenaLifecycleActive
+        - Rules:
+            - Id: !Ref AthenaLifecycleRuleId
+              Status: !Ref AthenaLifecycleStatus
+              Prefix: !Sub '${AthenaResultsPrefix}/'
+              ExpirationInDays: !Ref AthenaResultsExpirationDays
+        - !Ref 'AWS::NoValue'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref GlueDatabaseName
+        Description: !Ref GlueDatabaseDescription
+  GlueRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}${GlueRoleNameSuffix}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: !Ref GlueRoleAssumeService
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref GlueServiceRolePolicyArn
+      Policies:
+        - PolicyName: !Sub '${NamePrefix}${GlueS3PolicyNameSuffix}'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub '${DataBucket.Arn}/${DataPrefix}/*'
+              - Effect: Allow
+                Action: [s3:ListBucket]
+                Resource: !GetAtt DataBucket.Arn
+
+  AthenaWorkgroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Ref AthenaWorkgroupName
+      State: !Ref AthenaWorkgroupState
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: !If [AthenaEnforceConfiguration, true, false]
+        PublishCloudWatchMetricsEnabled: !If [AthenaPublishMetrics, true, false]
+        BytesScannedCutoffPerQuery: !Ref AthenaBytesScannedCutoff
+        ResultConfiguration:
+          OutputLocation: !Sub 's3://${DataBucket}/${AthenaResultsPrefix}/'
+          EncryptionConfiguration:
+            EncryptionOption: !Ref AthenaResultEncryptionOption
+
+  AnalyticsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}${AnalyticsRoleNameSuffix}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowTrustedPrincipal
+            Effect: Allow
+            Principal:
+              AWS: !If [UseDefaultAnalyticsPrincipal, !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root', !Ref AnalyticsTrustedPrincipalArn]
+            Action: sts:AssumeRole
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${AnalyticsRoleNameSuffix}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+  AnalyticsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${NamePrefix}${AnalyticsPolicyNameSuffix}'
+      Description: !Ref AnalyticsPolicyDescription
+      Roles: [!Ref AnalyticsRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: STSValidation
+            Effect: Allow
+            Action: [sts:GetCallerIdentity, sts:AssumeRole]
+            Resource: '*'
+          - Sid: AthenaGlueAndCUR
+            Effect: Allow
+            Action:
+              - athena:StartQueryExecution
+              - athena:GetQueryExecution
+              - athena:GetQueryResults
+              - athena:GetQueryResultsStream
+              - athena:ListDatabases
+              - athena:ListTableMetadata
+              - athena:GetWorkGroup
+              - athena:ListWorkGroups
+              - glue:GetTable
+              - glue:GetTables
+              - glue:GetDatabase
+              - glue:GetDatabases
+              - glue:GetPartition
+              - glue:GetPartitions
+              - glue:BatchGetPartition
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:PutObject
+              - s3:GetBucketLocation
+            Resource: '*'
+          - Sid: CostExplorer
+            Effect: Allow
+            Action: [ce:GetCostAndUsage, ce:GetCostForecast, ce:GetDimensionValues, ce:GetTags]
+            Resource: '*'
+          - Sid: S3Metadata
+            Effect: Allow
+            Action:
+              - s3:ListAllMyBuckets
+              - s3:GetBucketLocation
+              - s3:ListBucket
+              - s3:GetEncryptionConfiguration
+              - s3:GetBucketTagging
+              - s3:GetBucketVersioning
+              - s3:GetBucketLifecycleConfiguration
+              - s3:GetPublicAccessBlock
+            Resource: '*'
+          - Sid: EC2AndNetworkMetadata
+            Effect: Allow
+            Action:
+              - ec2:DescribeInstances
+              - ec2:DescribeVolumes
+              - ec2:DescribeSnapshots
+              - ec2:DescribeInstanceTypes
+              - ec2:DescribeTags
+              - ec2:DescribeVpcs
+              - ec2:DescribeSubnets
+              - ec2:DescribeInternetGateways
+              - ec2:DescribeNatGateways
+              - ec2:DescribeRouteTables
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DescribeVpcEndpoints
+              - ec2:DescribeAddresses
+              - ec2:DescribeFlowLogs
+              - ec2:DescribeRegions
+              - ec2:DescribeImages
+              - cloudwatch:GetMetricData
+            Resource: '*'
+          - Sid: ELBMetadata
+            Effect: Allow
+            Action:
+              - elasticloadbalancing:DescribeLoadBalancers
+              - elasticloadbalancing:DescribeLoadBalancerAttributes
+              - elasticloadbalancing:DescribeTargetGroups
+              - elasticloadbalancing:DescribeTargetGroupAttributes
+              - elasticloadbalancing:DescribeTargetHealth
+              - elasticloadbalancing:DescribeListeners
+              - elasticloadbalancing:DescribeRules
+              - elasticloadbalancing:DescribeTags
+              - elasticloadbalancing:DescribeInstanceHealth
+            Resource: '*'
+          - Sid: WAFMetadata
+            Effect: Allow
+            Action: [wafv2:GetWebACLForResource, wafv2:ListWebACLs]
+            Resource: '*'
+          - Sid: RDSMetadata
+            Effect: Allow
+            Action:
+              - rds:DescribeDBInstances
+              - rds:DescribeDBClusters
+              - rds:DescribeDBSnapshots
+              - rds:ListTagsForResource
+              - rds:DescribeDBSubnetGroups
+            Resource: '*'
+          - Sid: ECSMetadata
+            Effect: Allow
+            Action: [ecs:ListClusters, ecs:DescribeClusters, ecs:ListTasks, ecs:DescribeTasks, ecs:ListServices, ecs:DescribeServices]
+            Resource: '*'
+          - Sid: ECRMetadata
+            Effect: Allow
+            Action: [ecr:DescribeRepositories, ecr:DescribeImages, ecr:GetLifecyclePolicy]
+            Resource: '*'
+          - Sid: EKSMetadata
+            Effect: Allow
+            Action:
+              - eks:ListClusters
+              - eks:DescribeCluster
+              - eks:ListNodegroups
+              - eks:DescribeNodegroup
+              - eks:ListAddons
+              - eks:DescribeAddon
+              - eks:ListFargateProfiles
+              - eks:DescribeFargateProfile
+            Resource: '*'
+
+Outputs:
+  VpcId:
+    Description: Terraform output vpc_id
+    Value: !Ref Vpc
+  PublicSubnetIds:
+    Description: Terraform output public_subnet_ids; JSON-encoded AZ-to-subnet map
+    Value: !Sub
+      - '{"${Zone1}":"${Subnet1}","${Zone2}":"${Subnet2}"}'
+      - Zone1: !If [UseDefaultAz1, !Select [0, !GetAZs ''], !Ref AvailabilityZone1]
+        Zone2: !If [UseDefaultAz2, !Select [1, !GetAZs ''], !Ref AvailabilityZone2]
+        Subnet1: !Ref PublicSubnet1
+        Subnet2: !Ref PublicSubnet2
+  PrivateSubnetIds:
+    Description: Terraform output private_subnet_ids; JSON-encoded AZ-to-subnet map
+    Value: !Sub
+      - '{"${Zone1}":"${Subnet1}","${Zone2}":"${Subnet2}"}'
+      - Zone1: !If [UseDefaultAz1, !Select [0, !GetAZs ''], !Ref AvailabilityZone1]
+        Zone2: !If [UseDefaultAz2, !Select [1, !GetAZs ''], !Ref AvailabilityZone2]
+        Subnet1: !Ref PrivateSubnet1
+        Subnet2: !Ref PrivateSubnet2
+  BastionInstanceId:
+    Condition: CreateBastion
+    Value: !Ref BastionInstance
+  BastionSecurityGroupId:
+    Condition: CreateBastion
+    Value: !Ref BastionSecurityGroup
+  SshKeyPairName:
+    Value: !Ref Ec2KeyName
+  BastionPublicIp:
+    Condition: CreateBastion
+    Value: !If [CreateBastionEip, !Ref BastionEip, !GetAtt BastionInstance.PublicIp]
+  EksClusterName:
+    Value: !Ref EksCluster
+  EksClusterEndpoint:
+    Value: !GetAtt EksCluster.Endpoint
+  EksClusterArn:
+    Value: !GetAtt EksCluster.Arn
+  EksClusterSecurityGroupId:
+    Value: !GetAtt EksCluster.ClusterSecurityGroupId
+  EksNodesSecurityGroupId:
+    Value: !Ref EksNodesSecurityGroup
+  EksNodeGroupNames:
+    Description: Terraform output eks_node_group_names; JSON-encoded string array
+    Value: !Sub
+      - '["${NodeGroup1}","${NodeGroup2}"]'
+      - NodeGroup1: !Ref EksNodeGroupAz1
+        NodeGroup2: !Ref EksNodeGroupAz2
+  EksConfigureKubectl:
+    Value: !Sub 'aws eks update-kubeconfig --region ${AWS::Region} --name ${EksCluster}'
+  AlbControllerRoleArn:
+    Description: IAM role assumed by the AWS Load Balancer Controller through EKS Pod Identity
+    Value: !GetAtt AlbControllerRole.Arn
+  AlbControllerNamespace:
+    Value: !Ref AlbControllerNamespace
+  AlbControllerServiceAccountName:
+    Value: !Ref AlbControllerServiceAccountName
+  AlbControllerVersion:
+    Value: !Ref AlbControllerVersion
+  BucketName:
+    Value: !Ref DataBucket
+  DataLocation:
+    Value: !Sub 's3://${DataBucket}/${DataPrefix}/'
+  AthenaOutputLocation:
+    Value: !Sub 's3://${DataBucket}/${AthenaResultsPrefix}/'
+  GlueDatabaseName:
+    Value: !Ref GlueDatabase
+  GlueRoleArn:
+    Value: !GetAtt GlueRole.Arn
+  AthenaWorkgroupName:
+    Value: !Ref AthenaWorkgroup
+  AnalyticsIamRoleName:
+    Value: !Ref AnalyticsRole
+  AnalyticsIamRoleArn:
+    Value: !GetAtt AnalyticsRole.Arn
+  AnalyticsIamPolicyName:
+    Value: !Sub '${NamePrefix}${AnalyticsPolicyNameSuffix}'
+  AnalyticsIamPolicyArn:
+    Value: !Ref AnalyticsPolicy
+  VpcCidr:
+    Description: Terraform output vpc_cidr
+    Value: !GetAtt Vpc.CidrBlock
+  NatGatewayIds:
+    Description: Terraform output nat_gateway_ids; JSON-encoded AZ-to-NAT map
+    Value: !If
+      - NatEnabled
+      - !Sub
+        - '{"${Zone1}":"${Nat1}"}'
+        - Zone1: !If [UseDefaultAz1, !Select [0, !GetAZs ''], !Ref AvailabilityZone1]
+          Nat1: !Ref NatGateway1
+      - '{}'
+  InternetGatewayId:
+    Description: Terraform output internet_gateway_id
+    Value: !Ref InternetGateway
+  AlbDnsName:
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+  AlbTargetGroupArn:
+    Value: !Ref AlbTargetGroup
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup

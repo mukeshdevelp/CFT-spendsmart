@@ -1,0 +1,182 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SpendSmart iam nested stack
+Parameters:
+  ProjectName:
+    Type: String
+    Default: spendsmart
+
+  NamePrefix:
+    Type: String
+    Default: spendsmart-dev
+
+  Environment:
+    Type: String
+    Default: dev
+
+  AnalyticsRoleNameSuffix:
+    Type: String
+    Default: -analytics-role
+    
+  AnalyticsPolicyNameSuffix:
+    Type: String
+    Default: -analytics-policy
+  AnalyticsTrustedPrincipalArn:
+    Type: String
+    Default: ''
+    Description: Principal ARN allowed to assume the analytics role. Empty trusts the current account root.
+  AnalyticsPolicyDescription:
+    Type: String
+    Default: Analytics, cost, AWS infrastructure and service metadata access
+
+  # ALB
+Conditions:
+  UseDefaultAnalyticsPrincipal: !Equals [!Ref AnalyticsTrustedPrincipalArn, '']
+Resources:
+  AnalyticsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}${AnalyticsRoleNameSuffix}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowTrustedPrincipal
+            Effect: Allow
+            Principal:
+              AWS: !If [UseDefaultAnalyticsPrincipal, !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root', !Ref AnalyticsTrustedPrincipalArn]
+            Action: sts:AssumeRole
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${AnalyticsRoleNameSuffix}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+  AnalyticsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${NamePrefix}${AnalyticsPolicyNameSuffix}'
+      Description: !Ref AnalyticsPolicyDescription
+      Roles: [!Ref AnalyticsRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: STSValidation
+            Effect: Allow
+            Action: [sts:GetCallerIdentity, sts:AssumeRole]
+            Resource: '*'
+          - Sid: AthenaGlueAndCUR
+            Effect: Allow
+            Action:
+              - athena:StartQueryExecution
+              - athena:GetQueryExecution
+              - athena:GetQueryResults
+              - athena:GetQueryResultsStream
+              - athena:ListDatabases
+              - athena:ListTableMetadata
+              - athena:GetWorkGroup
+              - athena:ListWorkGroups
+              - glue:GetTable
+              - glue:GetTables
+              - glue:GetDatabase
+              - glue:GetDatabases
+              - glue:GetPartition
+              - glue:GetPartitions
+              - glue:BatchGetPartition
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:PutObject
+              - s3:GetBucketLocation
+            Resource: '*'
+          - Sid: CostExplorer
+            Effect: Allow
+            Action: [ce:GetCostAndUsage, ce:GetCostForecast, ce:GetDimensionValues, ce:GetTags]
+            Resource: '*'
+          - Sid: S3Metadata
+            Effect: Allow
+            Action:
+              - s3:ListAllMyBuckets
+              - s3:GetBucketLocation
+              - s3:ListBucket
+              - s3:GetEncryptionConfiguration
+              - s3:GetBucketTagging
+              - s3:GetBucketVersioning
+              - s3:GetBucketLifecycleConfiguration
+              - s3:GetPublicAccessBlock
+            Resource: '*'
+          - Sid: EC2AndNetworkMetadata
+            Effect: Allow
+            Action:
+              - ec2:DescribeInstances
+              - ec2:DescribeVolumes
+              - ec2:DescribeSnapshots
+              - ec2:DescribeInstanceTypes
+              - ec2:DescribeTags
+              - ec2:DescribeVpcs
+              - ec2:DescribeSubnets
+              - ec2:DescribeInternetGateways
+              - ec2:DescribeNatGateways
+              - ec2:DescribeRouteTables
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DescribeVpcEndpoints
+              - ec2:DescribeAddresses
+              - ec2:DescribeFlowLogs
+              - ec2:DescribeRegions
+              - ec2:DescribeImages
+              - cloudwatch:GetMetricData
+            Resource: '*'
+          - Sid: ELBMetadata
+            Effect: Allow
+            Action:
+              - elasticloadbalancing:DescribeLoadBalancers
+              - elasticloadbalancing:DescribeLoadBalancerAttributes
+              - elasticloadbalancing:DescribeTargetGroups
+              - elasticloadbalancing:DescribeTargetGroupAttributes
+              - elasticloadbalancing:DescribeTargetHealth
+              - elasticloadbalancing:DescribeListeners
+              - elasticloadbalancing:DescribeRules
+              - elasticloadbalancing:DescribeTags
+              - elasticloadbalancing:DescribeInstanceHealth
+            Resource: '*'
+          - Sid: WAFMetadata
+            Effect: Allow
+            Action: [wafv2:GetWebACLForResource, wafv2:ListWebACLs]
+            Resource: '*'
+          - Sid: RDSMetadata
+            Effect: Allow
+            Action:
+              - rds:DescribeDBInstances
+              - rds:DescribeDBClusters
+              - rds:DescribeDBSnapshots
+              - rds:ListTagsForResource
+              - rds:DescribeDBSubnetGroups
+            Resource: '*'
+          - Sid: ECSMetadata
+            Effect: Allow
+            Action: [ecs:ListClusters, ecs:DescribeClusters, ecs:ListTasks, ecs:DescribeTasks, ecs:ListServices, ecs:DescribeServices]
+            Resource: '*'
+          - Sid: ECRMetadata
+            Effect: Allow
+            Action: [ecr:DescribeRepositories, ecr:DescribeImages, ecr:GetLifecyclePolicy]
+            Resource: '*'
+          - Sid: EKSMetadata
+            Effect: Allow
+            Action:
+              - eks:ListClusters
+              - eks:DescribeCluster
+              - eks:ListNodegroups
+              - eks:DescribeNodegroup
+              - eks:ListAddons
+              - eks:DescribeAddon
+              - eks:ListFargateProfiles
+              - eks:DescribeFargateProfile
+            Resource: '*'
+
+Outputs:
+  AnalyticsIamRoleName:
+    Value: !Ref AnalyticsRole
+  AnalyticsIamRoleArn:
+    Value: !GetAtt AnalyticsRole.Arn
+  AnalyticsIamPolicyName:
+    Value: !Sub '${NamePrefix}${AnalyticsPolicyNameSuffix}'
+  AnalyticsIamPolicyArn:
+    Value: !Ref AnalyticsPolicy

@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SpendSmart glue nested stack
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: spendsmart-dev
+
+  DataPrefix:
+    Type: String
+    Default: data
+
+  GlueDatabaseName:
+    Type: String
+    Default: spendsmart_analytics
+  GlueRoleAssumeService:
+    Type: String
+    Default: glue.amazonaws.com
+
+  GlueServiceRolePolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+
+  GlueDatabaseDescription:
+    Type: String
+    Default: SpendSmart analytics catalog
+  GlueRoleNameSuffix:
+    Type: String
+    Default: -glue
+  GlueS3PolicyNameSuffix:
+    Type: String
+    Default: -glue-s3
+  BucketArn:
+    Type: String
+Resources:
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref GlueDatabaseName
+        Description: !Ref GlueDatabaseDescription
+  GlueRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}${GlueRoleNameSuffix}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: !Ref GlueRoleAssumeService
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref GlueServiceRolePolicyArn
+      Policies:
+        - PolicyName: !Sub '${NamePrefix}${GlueS3PolicyNameSuffix}'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub '${BucketArn}/${DataPrefix}/*'
+              - Effect: Allow
+                Action: [s3:ListBucket]
+                Resource: !Ref BucketArn
+
+Outputs:
+  GlueDatabaseName:
+    Value: !Ref GlueDatabase
+  GlueRoleArn:
+    Value: !GetAtt GlueRole.Arn
