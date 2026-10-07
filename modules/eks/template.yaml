@@ -302,6 +302,28 @@ Resources:
       SourceSecurityGroupId: !Ref BastionSecurityGroupId
       Description: SSH from bastion
 
+  BastionToClusterApiIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasBastion
+    Properties:
+      GroupId: !GetAtt EksCluster.ClusterSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref BastionSecurityGroupId
+      Description: HTTPS from bastion to EKS control plane API
+
+  BastionToNodesHttpsIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasBastion
+    Properties:
+      GroupId: !Ref EksNodesSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref BastionSecurityGroupId
+      Description: HTTPS from bastion to worker nodes
+
   EksNodeGroupAz1:
     Type: AWS::EKS::Nodegroup
     DependsOn:
@@ -328,6 +350,38 @@ Resources:
       Tags:
         Name: !Sub '${NamePrefix}${EksNodeGroupTagNameSuffix}1'
 
+  EksNodeGroup2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Identity security group for node group 2 database access
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-eks-ng2'
+        - Key: !Sub '${EksClusterTagKeyPrefix}${EksClusterName}'
+          Value: !Ref EksClusterTagValue
+
+  EksNodeGroup2LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub '${NamePrefix}${EksNodeLaunchTemplateSuffix}2'
+      LaunchTemplateData:
+        SecurityGroupIds:
+          - !Ref EksNodesSecurityGroup
+          - !GetAtt EksCluster.ClusterSecurityGroupId
+          - !Ref EksNodeGroup2SecurityGroup
+        BlockDeviceMappings:
+          - DeviceName: !Ref EksNodeDeviceName
+            Ebs:
+              VolumeSize: !Ref EksNodeDiskSize
+              VolumeType: !Ref EksNodeDiskType
+              Encrypted: true
+              DeleteOnTermination: true
+        MetadataOptions:
+          HttpEndpoint: !Ref EksNodeMetadataEndpoint
+          HttpTokens: !Ref EksNodeMetadataTokens
+          HttpPutResponseHopLimit: !Ref EksNodeMetadataHopLimit
+
   EksNodeGroupAz2:
     Type: AWS::EKS::Nodegroup
     DependsOn:
@@ -344,13 +398,17 @@ Resources:
         - !Ref EksNodeInstanceType
       AmiType: !Ref EksNodeAmiType
       CapacityType: !Ref EksNodeCapacityType
-      DiskSize: !Ref EksNodeDiskSize
+      LaunchTemplate:
+        Id: !Ref EksNodeGroup2LaunchTemplate
+        Version: !GetAtt EksNodeGroup2LaunchTemplate.LatestVersionNumber
       ScalingConfig:
         DesiredSize: !Ref EksNodeDesiredSize
         MinSize: !Ref EksNodeMinSize
         MaxSize: !Ref EksNodeMaxSize
       UpdateConfig:
         MaxUnavailable: !Ref EksNodeUpdateMaxUnavailable
+      Labels:
+        spendsmart.io/role: data
       Tags:
         Name: !Sub '${NamePrefix}${EksNodeGroupTagNameSuffix}2'
 
@@ -524,3 +582,5 @@ Outputs:
     Value: !Sub '${EksNodeGroupNamePrefix}1'
   EksNodeGroup2Name:
     Value: !Sub '${EksNodeGroupNamePrefix}2'
+  EksNodeGroup2SecurityGroupId:
+    Value: !Ref EksNodeGroup2SecurityGroup

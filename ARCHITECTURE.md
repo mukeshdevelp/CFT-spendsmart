@@ -14,6 +14,7 @@ The AWS Load Balancer Controller owns the application ALB and target group. It r
 | `modules/bastion/template.yaml` | Optional bastion security group, EC2 instance, and EIP |
 | `modules/eks/template.yaml` | EKS cluster, multi-AZ node groups, IAM roles, node security group, add-ons, and controller identity |
 | `modules/alb/template.yaml` | alb creation, target group creation and attachment of target group |
+| `modules/db/template.yaml` | Amazon RDS PostgreSQL instance, ClickHouse EC2 instance, Secrets Manager secrets, and Node Group 2 security group bindings |
 | `modules/spendsmart/template.yaml` | Optional private deployment host, EKS deployment access, Helm releases, and frontend Ingress |
 | `modules/s3/template.yaml` | Data and Athena-results bucket |
 | `modules/glue/template.yaml` | Glue database and service role |

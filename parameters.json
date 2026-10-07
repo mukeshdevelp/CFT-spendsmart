@@ -1,7 +1,7 @@
 [
   {
-    "ParameterKey": "Ec2KeyName",
-    "ParameterValue": "observabilty.pem"
+    "ParameterKey": "ExistingEc2KeyName",
+    "ParameterValue": "mukesh"
   },
   {
     "ParameterKey": "BastionSshCidrs",

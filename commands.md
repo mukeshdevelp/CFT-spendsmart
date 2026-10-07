@@ -1,4 +1,4 @@
-From the `CFT` directory in account `047078339928`, package the root and nested templates to the dedicated bucket in `us-east-1`, then create the stack. Before deployment, confirm `S3BucketName` is globally unique. `BastionSshCidrs` is a comma-separated list in `parameters.json`; this configuration includes `0.0.0.0/0`, which permits SSH from any IPv4 address. The EC2 key-pair parameter is set to the verified `observabilty.pem` key.
+From the `CFT` directory in account `047078339928`, package the root and nested templates to the dedicated bucket in `us-east-1`, then create the stack. Before deployment, confirm `S3BucketName` is globally unique. `BastionSshCidrs` is a comma-separated list in `parameters.json`; this configuration includes `0.0.0.0/0`, which permits SSH from any IPv4 address. The EC2 key-pair parameter is set to the verified `mukesh` key.
 
 ```sh
 aws cloudformation package \

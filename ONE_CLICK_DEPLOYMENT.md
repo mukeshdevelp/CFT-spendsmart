@@ -24,7 +24,7 @@ Set `DeploySpendSmart=true` only after the required namespace Secrets exist. The
 |---|---|
 | Select the target AWS account and region. Commands below use `us-east-1`. | CloudFormation resources, EC2 key pairs, quotas, and AMI lookups are regional/account-specific. |
 | AWS credentials authorized for CloudFormation, IAM, VPC/EC2, EKS and Pod Identity, S3, Glue, and Athena; acknowledge `CAPABILITY_NAMED_IAM`. | The stack creates named IAM roles and policies as well as network, compute, EKS, and data resources. |
-| The EC2 key-pair name `observabilty.pem` in `parameters.json`, spelled exactly as it exists in `us-east-1`. | The bastion and EKS node launch configuration use this key pair. |
+| The EC2 key-pair name `mukesh` in `parameters.json`, spelled exactly as it exists in `us-east-1`. | The bastion and EKS node launch configuration use this key pair. |
 | Set `BastionSshCidrs` in `parameters.json` as a comma-separated list of CIDRs. | Each value creates an SSH ingress rule. This configuration includes `0.0.0.0/0`, which opens SSH to every IPv4 address; the additional `/32` does not restrict that access. |
 | Set `S3BucketName` to a globally unique bucket name. | S3 bucket names are unique across AWS accounts and Regions. |
 | Verify that the selected EKS version, instance type, EKS/EC2/NAT quotas, and EKS Pod Identity are supported in the Region. | Unsupported versions, insufficient quotas, or unavailable capacity can prevent stack resources from being created. |
@@ -175,7 +175,7 @@ The ALB DNS name appears in the Ingress `ADDRESS` field. The controller owns and
 | `InsufficientCapabilitiesException` | Named IAM resources were not acknowledged. | Add `--capabilities CAPABILITY_NAMED_IAM` or acknowledge IAM resources in the Console. |
 | EKS cluster creation fails | Unsupported EKS version, missing quota, or regional availability issue. | Select a supported EKS version/region and verify service quotas. |
 | Node groups fail or have no ready nodes | Instance capacity, IAM, subnet IP capacity, or egress issue. | Inspect EKS node-group health; verify node role, private subnet routes, IP capacity, and required AWS API/image-pull egress. |
-| `InvalidKeyPair.NotFound` | Key-pair name is misspelled or in another region. | Use the exact regional key name `observabilty.pem` in `us-east-1`. |
+| `InvalidKeyPair.NotFound` | Key-pair name is misspelled or in another region. | Use the exact regional key name `mukesh` in `us-east-1`. |
 | S3 bucket name conflict | Bucket names are globally unique. | Choose a new unused `S3BucketName`. |
 | `kubectl` cannot connect | EKS endpoint is private-only. | Run commands from a network connected to the VPC or deliberately enable restricted public endpoint access. |
 | Controller reports `AccessDenied` | Pod Identity association or service-account settings do not match the Helm release. | Compare Helm namespace/service account with `AlbControllerNamespace` and `AlbControllerServiceAccountName`; inspect controller logs and association status. |

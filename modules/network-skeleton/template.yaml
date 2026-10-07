@@ -346,11 +346,5 @@ Outputs:
   InternetGatewayId:
     Description: Terraform output internet_gateway_id
     Value: !Ref InternetGateway
-  PublicSubnet1Id:
-    Value: !Ref PublicSubnet1
-  PublicSubnet2Id:
-    Value: !Ref PublicSubnet2
-  PrivateSubnet1Id:
-    Value: !Ref PrivateSubnet1
-  PrivateSubnet2Id:
-    Value: !Ref PrivateSubnet2
+  PrivateSubnet2AvailabilityZone:
+    Value: !GetAtt PrivateSubnet2.AvailabilityZone

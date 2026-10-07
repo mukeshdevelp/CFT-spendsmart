@@ -1,0 +1,247 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  SpendSmart databases colocated with EKS node group 2. PostgreSQL is Amazon RDS.
+  ClickHouse has no AWS-native managed engine, so it runs on a private EC2 host
+  in the same subnet as node group 2.
+
+Parameters:
+  NamePrefix:
+    Type: String
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PrivateSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+  PrivateSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+  PrivateSubnet2AvailabilityZone:
+    Type: String
+  NodeGroup2SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+
+Resources:
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL and ClickHouse access from EKS node group 2
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref NodeGroup2SecurityGroupId
+          Description: PostgreSQL from node group 2
+        - IpProtocol: tcp
+          FromPort: 8123
+          ToPort: 8123
+          SourceSecurityGroupId: !Ref NodeGroup2SecurityGroupId
+          Description: ClickHouse HTTP from node group 2
+        - IpProtocol: tcp
+          FromPort: 9000
+          ToPort: 9000
+          SourceSecurityGroupId: !Ref NodeGroup2SecurityGroupId
+          Description: ClickHouse native from node group 2
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-db-sg'
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: SpendSmart RDS subnets; instance pinned to node group 2 AZ
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-db-subnets'
+
+  PostgresSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/postgres'
+      Description: SpendSmart RDS PostgreSQL master user
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"dbadmin"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\\''`$<>&;|'
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-postgres-secret'
+
+  PostgresInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${NamePrefix}-pg'
+      Engine: postgres
+      EngineVersion: '16'
+      DBInstanceClass: db.t3.medium
+      AllocatedStorage: 50
+      StorageType: gp3
+      StorageEncrypted: true
+      MultiAZ: false
+      AvailabilityZone: !Ref PrivateSubnet2AvailabilityZone
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+      PubliclyAccessible: false
+      DBName: cloudsentry
+      MasterUsername: dbadmin
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${PostgresSecret}:SecretString:password}}'
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: 07:00-08:00
+      PreferredMaintenanceWindow: sun:08:00-sun:09:00
+      EnableCloudwatchLogsExports:
+        - postgresql
+      CopyTagsToSnapshot: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-postgres'
+        - Key: NodeGroup
+          Value: node-group-2
+
+  ClickHouseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/clickhouse'
+      Description: SpendSmart ClickHouse default user
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"default"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\\''`$<>&;|'
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-clickhouse-secret'
+
+  ClickHouseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: ClickHouseBootstrap
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref ClickHouseSecret
+              - Effect: Allow
+                Action: cloudformation:SignalResource
+                Resource: !Ref AWS::StackId
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-clickhouse-role'
+
+  ClickHouseInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref ClickHouseRole
+
+  ClickHouseInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: ClickHouseSecret
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT20M
+    Properties:
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      InstanceType: t3.large
+      IamInstanceProfile: !Ref ClickHouseInstanceProfile
+      SubnetId: !Ref PrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref DatabaseSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 100
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 2
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -Eeuo pipefail
+          trap 'status=$?; aws cloudformation signal-resource --stack-name ${AWS::StackName} --logical-resource-id ClickHouseInstance --unique-id clickhouse --status "$([ "$status" -eq 0 ] && echo SUCCESS || echo FAILURE)" --region ${AWS::Region} || true' EXIT
+
+          dnf install -y jq tar gzip
+          password="$(aws secretsmanager get-secret-value --secret-id '${ClickHouseSecret}' --region ${AWS::Region} --query SecretString --output text | jq -r .password)"
+
+          dnf install -y yum-utils
+          rpm --import https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key || true
+          cat >/etc/yum.repos.d/clickhouse.repo <<'REPO'
+          [clickhouse]
+          name=ClickHouse
+          baseurl=https://packages.clickhouse.com/rpm/clickhouse/
+          enabled=1
+          gpgcheck=0
+          REPO
+          dnf install -y clickhouse-server clickhouse-client
+
+          cat >/etc/clickhouse-server/config.d/listen.xml <<'XML'
+          <clickhouse>
+            <listen_host>0.0.0.0</listen_host>
+          </clickhouse>
+          XML
+
+          cat >/etc/clickhouse-server/users.d/default-password.xml <<XML
+          <clickhouse>
+            <users>
+              <default>
+                <password>${!password}</password>
+                <networks>
+                  <ip>::/0</ip>
+                </networks>
+              </default>
+            </users>
+          </clickhouse>
+          XML
+
+          systemctl enable --now clickhouse-server
+          clickhouse-client --password "$password" --query "CREATE DATABASE IF NOT EXISTS spendsmart"
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-clickhouse'
+        - Key: NodeGroup
+          Value: node-group-2
+
+Outputs:
+  PostgresEndpoint:
+    Value: !GetAtt PostgresInstance.Endpoint.Address
+  PostgresPort:
+    Value: !GetAtt PostgresInstance.Endpoint.Port
+  PostgresDatabase:
+    Value: cloudsentry
+  PostgresSecretArn:
+    Value: !Ref PostgresSecret
+  ClickHousePrivateIp:
+    Value: !GetAtt ClickHouseInstance.PrivateIp
+  ClickHouseHttpPort:
+    Value: '8123'
+  ClickHouseNativePort:
+    Value: '9000'
+  ClickHouseDatabase:
+    Value: spendsmart
+  ClickHouseSecretArn:
+    Value: !Ref ClickHouseSecret
+  DatabaseSecurityGroupId:
+    Value: !Ref DatabaseSecurityGroup
