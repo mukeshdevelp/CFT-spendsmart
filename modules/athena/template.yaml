@@ -54,6 +54,15 @@ Resources:
           OutputLocation: !Sub 's3://${BucketName}/${AthenaResultsPrefix}/'
           EncryptionConfiguration:
             EncryptionOption: !Ref AthenaResultEncryptionOption
+      Tags:
+        - Key: Name
+          Value: !Ref AthenaWorkgroupName
+        - Key: Project
+          Value: spendsmart
+        - Key: Environment
+          Value: dev
+        - Key: ManagedBy
+          Value: CFT
 
 Outputs:
   AthenaWorkgroupName:

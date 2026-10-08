@@ -63,6 +63,15 @@ Resources:
               - Effect: Allow
                 Action: [s3:ListBucket]
                 Resource: !Ref BucketArn
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${GlueRoleNameSuffix}'
+        - Key: Project
+          Value: spendsmart
+        - Key: Environment
+          Value: dev
+        - Key: ManagedBy
+          Value: CFT
 
 Outputs:
   GlueDatabaseName:

@@ -118,6 +118,8 @@ Resources:
   Bastion:
     Type: AWS::CloudFormation::Stack
     Condition: CreateBastion
+    DependsOn:
+      - Network
     Properties:
       TemplateURL: ./modules/bastion/template.yaml
       Parameters:
@@ -152,18 +154,18 @@ Resources:
 
   Db:
     Type: AWS::CloudFormation::Stack
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     DependsOn:
       - Eks
+      - Bastion
+      - BastionEksAccessEntry
     Properties:
       TemplateURL: ./modules/db/template.yaml
       Parameters:
         NamePrefix: !Ref NamePrefix
-        VpcId: !GetAtt Network.Outputs.VpcId
-        PrivateSubnet1Id: !GetAtt Network.Outputs.PrivateSubnet1Id
-        PrivateSubnet2Id: !GetAtt Network.Outputs.PrivateSubnet2Id
-        PrivateSubnet2AvailabilityZone: !GetAtt Network.Outputs.PrivateSubnet2AvailabilityZone
-        NodeGroup2SecurityGroupId: !GetAtt Eks.Outputs.EksNodeGroup2SecurityGroupId
+        ClusterName: spendsmart
+        BastionInstanceId: !GetAtt Bastion.Outputs.BastionInstanceId
+        BastionRoleName: !GetAtt Bastion.Outputs.BastionRoleName
 
   Alb:
     Type: AWS::CloudFormation::Stack
@@ -183,7 +185,7 @@ Resources:
         PrivateSubnet1Id: !GetAtt Network.Outputs.PrivateSubnet1Id
         PrivateSubnet2Id: !GetAtt Network.Outputs.PrivateSubnet2Id
         EksClusterName: spendsmart
-        NodesSecurityGroupId: !GetAtt Eks.Outputs.EksClusterSecurityGroupId
+        NodesSecurityGroupId: !GetAtt Eks.Outputs.EksNodesSecurityGroupId
         AlbName: spendsmart-dev-alb
         AlbTargetGroupName: spendsmart-dev-tg
         AlbListenerPort: 80
@@ -254,6 +256,9 @@ Resources:
         ProjectName: spendsmart
         NamePrefix: !Ref NamePrefix
         Environment: dev
+        BucketArn: !GetAtt S3.Outputs.BucketArn
+        CurPrefix: cur
+        AthenaResultsPrefix: athena-results
 
 Outputs:
   Ec2KeyPairName:
@@ -274,18 +279,6 @@ Outputs:
   PrivateSubnet2Id:
     Condition: CreateNewEksCluster
     Value: !GetAtt Network.Outputs.PrivateSubnet2Id
-  PublicSubnetIds:
-    Condition: CreateNewEksCluster
-    Value: !GetAtt Network.Outputs.PublicSubnetIds
-  PrivateSubnetIds:
-    Condition: CreateNewEksCluster
-    Value: !GetAtt Network.Outputs.PrivateSubnetIds
-  NatGatewayIds:
-    Condition: CreateNewEksCluster
-    Value: !GetAtt Network.Outputs.NatGatewayIds
-  InternetGatewayId:
-    Condition: CreateNewEksCluster
-    Value: !GetAtt Network.Outputs.InternetGatewayId
   BastionInstanceId:
     Condition: CreateBastion
     Value: !GetAtt Bastion.Outputs.BastionInstanceId
@@ -310,9 +303,6 @@ Outputs:
   EksNodesSecurityGroupId:
     Condition: CreateNewEksCluster
     Value: !GetAtt Eks.Outputs.EksNodesSecurityGroupId
-  EksNodeGroup2SecurityGroupId:
-    Condition: CreateNewEksCluster
-    Value: !GetAtt Eks.Outputs.EksNodeGroup2SecurityGroupId
   EksNodeGroupNames:
     Condition: CreateNewEksCluster
     Value: !GetAtt Eks.Outputs.EksNodeGroupNames
@@ -334,31 +324,31 @@ Outputs:
     Condition: InstallSpendSmart
     Value: !GetAtt SpendSmart.Outputs.IngressName
   PostgresEndpoint:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value: !GetAtt Db.Outputs.PostgresEndpoint
   PostgresPort:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value: !GetAtt Db.Outputs.PostgresPort
   PostgresDatabase:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value: !GetAtt Db.Outputs.PostgresDatabase
   PostgresSecretArn:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value: !GetAtt Db.Outputs.PostgresSecretArn
-  ClickHousePrivateIp:
-    Condition: CreateNewEksCluster
-    Value: !GetAtt Db.Outputs.ClickHousePrivateIp
+  ClickHouseEndpoint:
+    Condition: CreateBastion
+    Value: !GetAtt Db.Outputs.ClickHouseEndpoint
   ClickHouseHttpPort:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value: !GetAtt Db.Outputs.ClickHouseHttpPort
   ClickHouseNativePort:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value: !GetAtt Db.Outputs.ClickHouseNativePort
   ClickHouseDatabase:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value: !GetAtt Db.Outputs.ClickHouseDatabase
   ClickHouseSecretArn:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value: !GetAtt Db.Outputs.ClickHouseSecretArn
   BucketName:
     Value: !GetAtt S3.Outputs.BucketName
@@ -368,6 +358,14 @@ Outputs:
     Value: !GetAtt S3.Outputs.DataLocation
   AthenaOutputLocation:
     Value: !GetAtt S3.Outputs.AthenaOutputLocation
+  CurReportName:
+    Value: !GetAtt S3.Outputs.CurReportName
+  CurLocation:
+    Value: !GetAtt S3.Outputs.CurLocation
+  CurAthenaDatabaseName:
+    Value: !GetAtt S3.Outputs.CurAthenaDatabaseName
+  CurAthenaTableName:
+    Value: !GetAtt S3.Outputs.CurAthenaTableName
   GlueDatabaseName:
     Value: !GetAtt Glue.Outputs.GlueDatabaseName
   GlueRoleArn:

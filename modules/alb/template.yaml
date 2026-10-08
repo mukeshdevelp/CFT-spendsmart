@@ -53,12 +53,20 @@ Resources:
           CidrIp: 0.0.0.0/0
           Description: HTTP from internet
       SecurityGroupEgress:
-        - IpProtocol: -1
-          CidrIp: 0.0.0.0/0
-          Description: ALB outbound traffic
+        - IpProtocol: tcp
+          FromPort: !Ref AlbTargetPort
+          ToPort: !Ref AlbTargetPort
+          DestinationSecurityGroupId: !Ref NodesSecurityGroupId
+          Description: ALB to worker node port
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}-alb-sg'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CFT
 
   # Lets the ALB reach the NodePort on the worker nodes
   AlbToNodesIngress:
@@ -112,6 +120,12 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}-target-group'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CFT
 
   SpendSmartAlbListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -154,6 +168,15 @@ Resources:
                   - autoscaling:DetachLoadBalancerTargetGroups
                   - elasticloadbalancing:DescribeTargetGroups
                 Resource: '*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-alb-target-registration'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CFT
 
   TargetRegistrationFunction:
     Type: AWS::Lambda::Function

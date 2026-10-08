@@ -148,6 +148,12 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}${InternetGatewayNameSuffix}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedByTag
 
 
   VpcGatewayAttachment:
@@ -172,6 +178,12 @@ Resources:
           Value: !Ref AlbSubnetRoleTag
         - Key: !Sub 'kubernetes.io/cluster/${EksClusterName}'
           Value: !Ref ClusterSubnetTagValue
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedByTag
 
 
   PublicSubnet2:
@@ -190,6 +202,12 @@ Resources:
           Value: !Ref AlbSubnetRoleTag
         - Key: !Sub 'kubernetes.io/cluster/${EksClusterName}'
           Value: !Ref ClusterSubnetTagValue
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedByTag
 
 
   PrivateSubnet1:
@@ -207,6 +225,12 @@ Resources:
           Value: !Ref AlbSubnetRoleTag
         - Key: !Sub 'kubernetes.io/cluster/${EksClusterName}'
           Value: !Ref ClusterSubnetTagValue
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedByTag
 
 
   PrivateSubnet2:
@@ -224,6 +248,12 @@ Resources:
           Value: !Ref AlbSubnetRoleTag
         - Key: !Sub 'kubernetes.io/cluster/${EksClusterName}'
           Value: !Ref ClusterSubnetTagValue
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedByTag
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -232,6 +262,12 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}${PublicRouteTableNameSuffix}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedByTag
 
   PublicInternetRoute:
     Type: AWS::EC2::Route
@@ -259,6 +295,12 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}${NatEipNameSuffix}1'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedByTag
   NatGateway1:
     Type: AWS::EC2::NatGateway
     Condition: NatEnabled
@@ -269,6 +311,12 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}${NatGatewayNameSuffix}1'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedByTag
   PrivateRouteTable1:
     Type: AWS::EC2::RouteTable
     Condition: NatEnabled
@@ -277,6 +325,12 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}${PrivateRouteTableNameSuffix}1'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedByTag
   PrivateNatRoute1:
     Type: AWS::EC2::Route
     Condition: NatEnabled

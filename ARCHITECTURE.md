@@ -14,14 +14,14 @@ The AWS Load Balancer Controller owns the application ALB and target group. It r
 | `modules/bastion/template.yaml` | Optional bastion security group, EC2 instance, and EIP |
 | `modules/eks/template.yaml` | EKS cluster, multi-AZ node groups, IAM roles, node security group, add-ons, and controller identity |
 | `modules/alb/template.yaml` | alb creation, target group creation and attachment of target group |
-| `modules/db/template.yaml` | Amazon RDS PostgreSQL instance, ClickHouse EC2 instance, Secrets Manager secrets, and Node Group 2 security group bindings |
+| `modules/db/template.yaml` | PostgreSQL and ClickHouse StatefulSets pinned to EKS node group 2, plus Secrets Manager credentials |
 | `modules/spendsmart/template.yaml` | Optional private deployment host, EKS deployment access, Helm releases, and frontend Ingress |
 | `modules/s3/template.yaml` | Data and Athena-results bucket |
 | `modules/glue/template.yaml` | Glue database and service role |
 | `modules/athena/template.yaml` | Athena workgroup |
 | `modules/iam/template.yaml` | Analytics role and policy |
 
-`main.yml` is the deployment entrypoint. Run `aws cloudformation package` to upload the child templates and generate the deployable parent template. `template.yaml` is retained as the monolithic reference.
+`main.yml` is the deployment entrypoint. Run `aws cloudformation package` to upload the child templates and generate the deployable parent template.
 
 ## Architecture
 

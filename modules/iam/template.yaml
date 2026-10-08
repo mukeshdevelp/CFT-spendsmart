@@ -27,6 +27,15 @@ Parameters:
   AnalyticsPolicyDescription:
     Type: String
     Default: Analytics, cost, AWS infrastructure and service metadata access
+  BucketArn:
+    Type: String
+    Default: ''
+  CurPrefix:
+    Type: String
+    Default: cur
+  AthenaResultsPrefix:
+    Type: String
+    Default: athena-results
 
   # ALB
 Conditions:
@@ -64,6 +73,23 @@ Resources:
             Effect: Allow
             Action: [sts:GetCallerIdentity, sts:AssumeRole]
             Resource: '*'
+          - Sid: ReadCurAndAthenaResults
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+            Resource:
+              - !Sub '${BucketArn}/${CurPrefix}/*'
+              - !Sub '${BucketArn}/${AthenaResultsPrefix}/*'
+          - Sid: ListCurAndAthenaResults
+            Effect: Allow
+            Action: s3:ListBucket
+            Resource: !Ref BucketArn
+            Condition:
+              StringLike:
+                s3:prefix:
+                  - !Sub '${CurPrefix}/*'
+                  - !Sub '${AthenaResultsPrefix}/*'
           - Sid: AthenaGlueAndCUR
             Effect: Allow
             Action:

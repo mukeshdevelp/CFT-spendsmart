@@ -1,125 +1,75 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  SpendSmart databases colocated with EKS node group 2. PostgreSQL is Amazon RDS.
-  ClickHouse has no AWS-native managed engine, so it runs on a private EC2 host
-  in the same subnet as node group 2.
+  PostgreSQL and ClickHouse as EKS workloads pinned to node group 2.
+  Credentials are stored in Secrets Manager and applied from the bastion.
 
 Parameters:
   NamePrefix:
     Type: String
-  VpcId:
-    Type: AWS::EC2::VPC::Id
-  PrivateSubnet1Id:
-    Type: AWS::EC2::Subnet::Id
-  PrivateSubnet2Id:
-    Type: AWS::EC2::Subnet::Id
-  PrivateSubnet2AvailabilityZone:
+  ClusterName:
     Type: String
-  NodeGroup2SecurityGroupId:
-    Type: AWS::EC2::SecurityGroup::Id
+  BastionInstanceId:
+    Type: String
+  BastionRoleName:
+    Type: String
 
 Resources:
-  DatabaseSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: PostgreSQL and ClickHouse access from EKS node group 2
-      VpcId: !Ref VpcId
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 5432
-          ToPort: 5432
-          SourceSecurityGroupId: !Ref NodeGroup2SecurityGroupId
-          Description: PostgreSQL from node group 2
-        - IpProtocol: tcp
-          FromPort: 8123
-          ToPort: 8123
-          SourceSecurityGroupId: !Ref NodeGroup2SecurityGroupId
-          Description: ClickHouse HTTP from node group 2
-        - IpProtocol: tcp
-          FromPort: 9000
-          ToPort: 9000
-          SourceSecurityGroupId: !Ref NodeGroup2SecurityGroupId
-          Description: ClickHouse native from node group 2
-      SecurityGroupEgress:
-        - IpProtocol: '-1'
-          CidrIp: 0.0.0.0/0
-      Tags:
-        - Key: Name
-          Value: !Sub '${NamePrefix}-db-sg'
-
-  DbSubnetGroup:
-    Type: AWS::RDS::DBSubnetGroup
-    Properties:
-      DBSubnetGroupDescription: SpendSmart RDS subnets; instance pinned to node group 2 AZ
-      SubnetIds:
-        - !Ref PrivateSubnet1Id
-        - !Ref PrivateSubnet2Id
-      Tags:
-        - Key: Name
-          Value: !Sub '${NamePrefix}-db-subnets'
-
   PostgresSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub '${NamePrefix}/postgres'
-      Description: SpendSmart RDS PostgreSQL master user
+      Description: SpendSmart PostgreSQL user on node group 2
       GenerateSecretString:
-        SecretStringTemplate: '{"username":"dbadmin"}'
+        SecretStringTemplate: '{"username":"dbadmin","database":"cloudsentry"}'
         GenerateStringKey: password
         PasswordLength: 32
         ExcludeCharacters: '"@/\\''`$<>&;|'
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}-postgres-secret'
-
-  PostgresInstance:
-    Type: AWS::RDS::DBInstance
-    DeletionPolicy: Snapshot
-    UpdateReplacePolicy: Snapshot
-    Properties:
-      DBInstanceIdentifier: !Sub '${NamePrefix}-pg'
-      Engine: postgres
-      EngineVersion: '16'
-      DBInstanceClass: db.t3.medium
-      AllocatedStorage: 50
-      StorageType: gp3
-      StorageEncrypted: true
-      MultiAZ: false
-      AvailabilityZone: !Ref PrivateSubnet2AvailabilityZone
-      DBSubnetGroupName: !Ref DbSubnetGroup
-      VPCSecurityGroups:
-        - !Ref DatabaseSecurityGroup
-      PubliclyAccessible: false
-      DBName: cloudsentry
-      MasterUsername: dbadmin
-      MasterUserPassword: !Sub '{{resolve:secretsmanager:${PostgresSecret}:SecretString:password}}'
-      BackupRetentionPeriod: 7
-      PreferredBackupWindow: 07:00-08:00
-      PreferredMaintenanceWindow: sun:08:00-sun:09:00
-      EnableCloudwatchLogsExports:
-        - postgresql
-      CopyTagsToSnapshot: true
-      Tags:
-        - Key: Name
-          Value: !Sub '${NamePrefix}-postgres'
-        - Key: NodeGroup
-          Value: node-group-2
+        - Key: Project
+          Value: spendsmart
+        - Key: Environment
+          Value: dev
+        - Key: ManagedBy
+          Value: CFT
 
   ClickHouseSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub '${NamePrefix}/clickhouse'
-      Description: SpendSmart ClickHouse default user
+      Description: SpendSmart ClickHouse user on node group 2
       GenerateSecretString:
-        SecretStringTemplate: '{"username":"default"}'
+        SecretStringTemplate: '{"username":"default","database":"spendsmart"}'
         GenerateStringKey: password
         PasswordLength: 32
         ExcludeCharacters: '"@/\\''`$<>&;|'
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}-clickhouse-secret'
+        - Key: Project
+          Value: spendsmart
+        - Key: Environment
+          Value: dev
+        - Key: ManagedBy
+          Value: CFT
 
-  ClickHouseRole:
+  BastionSecretRead:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub '${NamePrefix}-bastion-db-secrets'
+      Roles:
+        - !Ref BastionRoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource:
+              - !Ref PostgresSecret
+              - !Ref ClickHouseSecret
+
+  InstallerRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -127,114 +77,321 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Service: ec2.amazonaws.com
+              Service: lambda.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: ClickHouseBootstrap
+        - PolicyName: RunDatabaseInstall
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action: secretsmanager:GetSecretValue
-                Resource: !Ref ClickHouseSecret
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${BastionInstanceId}'
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript'
               - Effect: Allow
-                Action: cloudformation:SignalResource
-                Resource: !Ref AWS::StackId
+                Action:
+                  - ssm:GetCommandInvocation
+                  - ssm:ListCommands
+                Resource: '*'
       Tags:
         - Key: Name
-          Value: !Sub '${NamePrefix}-clickhouse-role'
+          Value: !Sub '${NamePrefix}-db-installer'
+        - Key: Project
+          Value: spendsmart
+        - Key: Environment
+          Value: dev
+        - Key: ManagedBy
+          Value: CFT
 
-  ClickHouseInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
+  InstallerFunction:
+    Type: AWS::Lambda::Function
     Properties:
-      Roles:
-        - !Ref ClickHouseRole
-
-  ClickHouseInstance:
-    Type: AWS::EC2::Instance
-    DependsOn: ClickHouseSecret
-    CreationPolicy:
-      ResourceSignal:
-        Count: 1
-        Timeout: PT20M
-    Properties:
-      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
-      InstanceType: t3.large
-      IamInstanceProfile: !Ref ClickHouseInstanceProfile
-      SubnetId: !Ref PrivateSubnet2Id
-      SecurityGroupIds:
-        - !Ref DatabaseSecurityGroup
-      BlockDeviceMappings:
-        - DeviceName: /dev/xvda
-          Ebs:
-            VolumeSize: 100
-            VolumeType: gp3
-            Encrypted: true
-            DeleteOnTermination: true
-      MetadataOptions:
-        HttpEndpoint: enabled
-        HttpTokens: required
-        HttpPutResponseHopLimit: 2
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -Eeuo pipefail
-          trap 'status=$?; aws cloudformation signal-resource --stack-name ${AWS::StackName} --logical-resource-id ClickHouseInstance --unique-id clickhouse --status "$([ "$status" -eq 0 ] && echo SUCCESS || echo FAILURE)" --region ${AWS::Region} || true' EXIT
-
-          dnf install -y jq tar gzip
-          password="$(aws secretsmanager get-secret-value --secret-id '${ClickHouseSecret}' --region ${AWS::Region} --query SecretString --output text | jq -r .password)"
-
-          dnf install -y yum-utils
-          rpm --import https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key || true
-          cat >/etc/yum.repos.d/clickhouse.repo <<'REPO'
-          [clickhouse]
-          name=ClickHouse
-          baseurl=https://packages.clickhouse.com/rpm/clickhouse/
-          enabled=1
-          gpgcheck=0
-          REPO
-          dnf install -y clickhouse-server clickhouse-client
-
-          cat >/etc/clickhouse-server/config.d/listen.xml <<'XML'
-          <clickhouse>
-            <listen_host>0.0.0.0</listen_host>
-          </clickhouse>
-          XML
-
-          cat >/etc/clickhouse-server/users.d/default-password.xml <<XML
-          <clickhouse>
-            <users>
-              <default>
-                <password>${!password}</password>
-                <networks>
-                  <ip>::/0</ip>
-                </networks>
-              </default>
-            </users>
-          </clickhouse>
-          XML
-
-          systemctl enable --now clickhouse-server
-          clickhouse-client --password "$password" --query "CREATE DATABASE IF NOT EXISTS spendsmart"
+      Description: Applies PostgreSQL and ClickHouse onto EKS node group 2
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 900
+      Role: !GetAtt InstallerRole.Arn
       Tags:
         - Key: Name
-          Value: !Sub '${NamePrefix}-clickhouse'
-        - Key: NodeGroup
-          Value: node-group-2
+          Value: !Sub '${NamePrefix}-db-installer'
+        - Key: Project
+          Value: spendsmart
+        - Key: Environment
+          Value: dev
+        - Key: ManagedBy
+          Value: CFT
+      Code:
+        ZipFile: |
+          import time
+          import boto3
+          import cfnresponse
+          ssm = boto3.client('ssm')
+
+          def handler(event, context):
+              p = event['ResourceProperties']
+              delete = event['RequestType'] == 'Delete'
+              cmd = p['DeleteCommand'] if delete else p['ApplyCommand']
+              try:
+                  resp = None
+                  for _ in range(30):
+                      try:
+                          resp = ssm.send_command(
+                              InstanceIds=[p['InstanceId']],
+                              DocumentName='AWS-RunShellScript',
+                              TimeoutSeconds=800,
+                              Parameters={'commands': [cmd]})
+                          break
+                      except Exception as exc:
+                          if 'InvalidInstanceId' not in str(exc):
+                              raise
+                          time.sleep(10)
+                  if not resp:
+                      raise Exception('bastion is not registered with Systems Manager')
+                  cid = resp['Command']['CommandId']
+                  for _ in range(80):
+                      time.sleep(10)
+                      inv = ssm.get_command_invocation(CommandId=cid, InstanceId=p['InstanceId'])
+                      status = inv['Status']
+                      if status == 'Success':
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {'CommandId': cid})
+                          return
+                      if status in ('Failed', 'Cancelled', 'TimedOut'):
+                          err = (inv.get('StandardErrorContent') or inv.get('StandardOutputContent') or status)[:2000]
+                          result = cfnresponse.SUCCESS if delete else cfnresponse.FAILED
+                          cfnresponse.send(event, context, result, {'Error': err})
+                          return
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': 'timed out waiting for database install'})
+              except Exception as exc:
+                  if delete:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(exc)[:2000]})
+
+  DatabaseInstall:
+    Type: Custom::DatabaseInstall
+    DependsOn: BastionSecretRead
+    Properties:
+      ServiceToken: !GetAtt InstallerFunction.Arn
+      InstanceId: !Ref BastionInstanceId
+      DeleteCommand: !Sub |
+        set +e
+        aws eks update-kubeconfig --region ${AWS::Region} --name ${ClusterName}
+        kubectl delete namespace databases --wait=false
+        exit 0
+      ApplyCommand: !Sub |
+        set -euo pipefail
+        if ! command -v kubectl >/dev/null 2>&1; then
+          curl -fsSL -o /usr/local/bin/kubectl https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl
+          chmod +x /usr/local/bin/kubectl
+        fi
+        aws eks update-kubeconfig --region ${AWS::Region} --name ${ClusterName}
+        ready=0
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+          if kubectl get nodes; then ready=1; break; fi
+          sleep 10
+        done
+        test "$ready" = 1
+        PGPASS=$(aws secretsmanager get-secret-value --secret-id '${PostgresSecret}' --region ${AWS::Region} --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')
+        CHPASS=$(aws secretsmanager get-secret-value --secret-id '${ClickHouseSecret}' --region ${AWS::Region} --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')
+        kubectl create namespace databases --dry-run=client -o yaml | kubectl apply -f -
+        kubectl -n databases create secret generic postgres-auth --from-literal=username=dbadmin --from-literal=password="$PGPASS" --from-literal=database=cloudsentry --dry-run=client -o yaml | kubectl apply -f -
+        kubectl -n databases create secret generic clickhouse-auth --from-literal=username=default --from-literal=password="$CHPASS" --from-literal=database=spendsmart --dry-run=client -o yaml | kubectl apply -f -
+        python3 - <<'PY'
+        import textwrap
+        open("/tmp/spendsmart-dbs.yaml", "w").write(textwrap.dedent("""
+        apiVersion: apps/v1
+        kind: StatefulSet
+        metadata:
+          name: postgres
+          namespace: databases
+        spec:
+          serviceName: postgres
+          replicas: 1
+          selector:
+            matchLabels:
+              app: postgres
+          template:
+            metadata:
+              labels:
+                app: postgres
+            spec:
+              nodeSelector:
+                spendsmart.io/role: data
+              tolerations:
+                - key: spendsmart.io/role
+                  operator: Equal
+                  value: data
+                  effect: NoSchedule
+              initContainers:
+                - name: prepare
+                  image: public.ecr.aws/docker/library/busybox:1.36
+                  command: ["sh", "-c", "mkdir -p /data/pgdata && chown -R 999:999 /data"]
+                  volumeMounts:
+                    - name: data
+                      mountPath: /data
+              containers:
+                - name: postgres
+                  image: public.ecr.aws/docker/library/postgres:16
+                  ports:
+                    - containerPort: 5432
+                  env:
+                    - name: POSTGRES_USER
+                      valueFrom:
+                        secretKeyRef:
+                          name: postgres-auth
+                          key: username
+                    - name: POSTGRES_PASSWORD
+                      valueFrom:
+                        secretKeyRef:
+                          name: postgres-auth
+                          key: password
+                    - name: POSTGRES_DB
+                      valueFrom:
+                        secretKeyRef:
+                          name: postgres-auth
+                          key: database
+                    - name: PGDATA
+                      value: /var/lib/postgresql/data/pgdata
+                  readinessProbe:
+                    exec:
+                      command: ["pg_isready", "-U", "dbadmin", "-d", "cloudsentry"]
+                    initialDelaySeconds: 10
+                    periodSeconds: 10
+                  resources:
+                    requests:
+                      cpu: 250m
+                      memory: 512Mi
+                    limits:
+                      memory: 1536Mi
+                  volumeMounts:
+                    - name: data
+                      mountPath: /var/lib/postgresql/data
+              volumes:
+                - name: data
+                  hostPath:
+                    path: /var/lib/spendsmart/postgres
+                    type: DirectoryOrCreate
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: postgres
+          namespace: databases
+        spec:
+          selector:
+            app: postgres
+          ports:
+            - port: 5432
+              targetPort: 5432
+        ---
+        apiVersion: apps/v1
+        kind: StatefulSet
+        metadata:
+          name: clickhouse
+          namespace: databases
+        spec:
+          serviceName: clickhouse
+          replicas: 1
+          selector:
+            matchLabels:
+              app: clickhouse
+          template:
+            metadata:
+              labels:
+                app: clickhouse
+            spec:
+              nodeSelector:
+                spendsmart.io/role: data
+              tolerations:
+                - key: spendsmart.io/role
+                  operator: Equal
+                  value: data
+                  effect: NoSchedule
+              initContainers:
+                - name: prepare
+                  image: public.ecr.aws/docker/library/busybox:1.36
+                  command: ["sh", "-c", "mkdir -p /data && chown -R 101:101 /data"]
+                  volumeMounts:
+                    - name: data
+                      mountPath: /data
+              containers:
+                - name: clickhouse
+                  image: clickhouse/clickhouse-server:24.8
+                  ports:
+                    - containerPort: 8123
+                    - containerPort: 9000
+                  env:
+                    - name: CLICKHOUSE_USER
+                      valueFrom:
+                        secretKeyRef:
+                          name: clickhouse-auth
+                          key: username
+                    - name: CLICKHOUSE_PASSWORD
+                      valueFrom:
+                        secretKeyRef:
+                          name: clickhouse-auth
+                          key: password
+                    - name: CLICKHOUSE_DB
+                      valueFrom:
+                        secretKeyRef:
+                          name: clickhouse-auth
+                          key: database
+                  readinessProbe:
+                    httpGet:
+                      path: /ping
+                      port: 8123
+                    initialDelaySeconds: 20
+                    periodSeconds: 10
+                  resources:
+                    requests:
+                      cpu: 500m
+                      memory: 1Gi
+                    limits:
+                      memory: 3Gi
+                  volumeMounts:
+                    - name: data
+                      mountPath: /var/lib/clickhouse
+              volumes:
+                - name: data
+                  hostPath:
+                    path: /var/lib/spendsmart/clickhouse
+                    type: DirectoryOrCreate
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: clickhouse
+          namespace: databases
+        spec:
+          selector:
+            app: clickhouse
+          ports:
+            - name: http
+              port: 8123
+              targetPort: 8123
+            - name: native
+              port: 9000
+              targetPort: 9000
+        """))
+        PY
+        kubectl apply -f /tmp/spendsmart-dbs.yaml
+        kubectl -n databases rollout status statefulset/postgres --timeout=600s
+        kubectl -n databases rollout status statefulset/clickhouse --timeout=600s
 
 Outputs:
   PostgresEndpoint:
-    Value: !GetAtt PostgresInstance.Endpoint.Address
+    Value: postgres.databases.svc.cluster.local
   PostgresPort:
-    Value: !GetAtt PostgresInstance.Endpoint.Port
+    Value: '5432'
   PostgresDatabase:
     Value: cloudsentry
   PostgresSecretArn:
     Value: !Ref PostgresSecret
-  ClickHousePrivateIp:
-    Value: !GetAtt ClickHouseInstance.PrivateIp
+  ClickHouseEndpoint:
+    Value: clickhouse.databases.svc.cluster.local
   ClickHouseHttpPort:
     Value: '8123'
   ClickHouseNativePort:
@@ -243,5 +400,3 @@ Outputs:
     Value: spendsmart
   ClickHouseSecretArn:
     Value: !Ref ClickHouseSecret
-  DatabaseSecurityGroupId:
-    Value: !Ref DatabaseSecurityGroup

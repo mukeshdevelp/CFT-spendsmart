@@ -145,7 +145,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Condition: CreateNewEksCluster
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/282131d18c54faed619cb655505f4501.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/c9943b6f23b1d4599a33b2424eec411d.template
       Parameters:
         ProjectName: spendsmart
         NamePrefix:
@@ -155,8 +155,10 @@ Resources:
   Bastion:
     Type: AWS::CloudFormation::Stack
     Condition: CreateBastion
+    DependsOn:
+    - Network
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/272c47b942def7182737e515e3a60fae.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/e9902e4cc3efd8844c76dcb3acc3de32.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix
@@ -188,7 +190,7 @@ Resources:
     DependsOn:
     - Network
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/ad31d17ee3377b22d6b67ede3b00b597.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/6a0b450b380e12c86dc33e6016fb816f.template
       Parameters:
         ProjectName: spendsmart
         NamePrefix:
@@ -216,34 +218,25 @@ Resources:
           - ''
   Db:
     Type: AWS::CloudFormation::Stack
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     DependsOn:
     - Eks
+    - Bastion
+    - BastionEksAccessEntry
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/80bb997216a5194b81e4f357147a2d1c.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/7d6a788c191595d6865bfc044aaf830b.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix
-        VpcId:
+        ClusterName: spendsmart
+        BastionInstanceId:
           Fn::GetAtt:
-          - Network
-          - Outputs.VpcId
-        PrivateSubnet1Id:
+          - Bastion
+          - Outputs.BastionInstanceId
+        BastionRoleName:
           Fn::GetAtt:
-          - Network
-          - Outputs.PrivateSubnet1Id
-        PrivateSubnet2Id:
-          Fn::GetAtt:
-          - Network
-          - Outputs.PrivateSubnet2Id
-        PrivateSubnet2AvailabilityZone:
-          Fn::GetAtt:
-          - Network
-          - Outputs.PrivateSubnet2AvailabilityZone
-        NodeGroup2SecurityGroupId:
-          Fn::GetAtt:
-          - Eks
-          - Outputs.EksNodeGroup2SecurityGroupId
+          - Bastion
+          - Outputs.BastionRoleName
   Alb:
     Type: AWS::CloudFormation::Stack
     Condition: CreateNewEksCluster
@@ -251,7 +244,7 @@ Resources:
     - Network
     - Eks
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/5ab8a67ea44f94789f140573eb26e48e.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/38d86c05953e5b96f628a550d192d4e0.template
       Parameters:
         ProjectName: spendsmart
         NamePrefix:
@@ -281,7 +274,7 @@ Resources:
         NodesSecurityGroupId:
           Fn::GetAtt:
           - Eks
-          - Outputs.EksClusterSecurityGroupId
+          - Outputs.EksNodesSecurityGroupId
         AlbName: spendsmart-dev-alb
         AlbTargetGroupName: spendsmart-dev-tg
         AlbListenerPort: 80
@@ -360,7 +353,7 @@ Resources:
   S3:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/6d417da527733ebfd1b57c6938a49f5b.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/21c7c297ae23b7d3726609f2d3ba24ae.template
       Parameters:
         ProjectName: spendsmart
         Environment: dev
@@ -369,7 +362,7 @@ Resources:
   Glue:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/41be3066644c4deabd91d2c65bc63a66.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/8e56e05823053ad1ce18e8be826ae833.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix
@@ -380,7 +373,7 @@ Resources:
   Athena:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/0fee92b7b46f5bf7a9b34569d6a27413.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/2ce15407b5b81ba049626d3f6c9744e9.template
       Parameters:
         BucketName:
           Fn::GetAtt:
@@ -389,12 +382,18 @@ Resources:
   Iam:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/570bbcf858afd164e8ba4125a9ac6e69.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/2222302e977b47fdf3882e2e4fb1174c.template
       Parameters:
         ProjectName: spendsmart
         NamePrefix:
           Ref: NamePrefix
         Environment: dev
+        BucketArn:
+          Fn::GetAtt:
+          - S3
+          - Outputs.BucketArn
+        CurPrefix: cur
+        AthenaResultsPrefix: athena-results
 Outputs:
   Ec2KeyPairName:
     Value:
@@ -442,30 +441,6 @@ Outputs:
       Fn::GetAtt:
       - Network
       - Outputs.PrivateSubnet2Id
-  PublicSubnetIds:
-    Condition: CreateNewEksCluster
-    Value:
-      Fn::GetAtt:
-      - Network
-      - Outputs.PublicSubnetIds
-  PrivateSubnetIds:
-    Condition: CreateNewEksCluster
-    Value:
-      Fn::GetAtt:
-      - Network
-      - Outputs.PrivateSubnetIds
-  NatGatewayIds:
-    Condition: CreateNewEksCluster
-    Value:
-      Fn::GetAtt:
-      - Network
-      - Outputs.NatGatewayIds
-  InternetGatewayId:
-    Condition: CreateNewEksCluster
-    Value:
-      Fn::GetAtt:
-      - Network
-      - Outputs.InternetGatewayId
   BastionInstanceId:
     Condition: CreateBastion
     Value:
@@ -520,12 +495,6 @@ Outputs:
       Fn::GetAtt:
       - Eks
       - Outputs.EksNodesSecurityGroupId
-  EksNodeGroup2SecurityGroupId:
-    Condition: CreateNewEksCluster
-    Value:
-      Fn::GetAtt:
-      - Eks
-      - Outputs.EksNodeGroup2SecurityGroupId
   EksNodeGroupNames:
     Condition: CreateNewEksCluster
     Value:
@@ -565,55 +534,55 @@ Outputs:
       - SpendSmart
       - Outputs.IngressName
   PostgresEndpoint:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value:
       Fn::GetAtt:
       - Db
       - Outputs.PostgresEndpoint
   PostgresPort:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value:
       Fn::GetAtt:
       - Db
       - Outputs.PostgresPort
   PostgresDatabase:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value:
       Fn::GetAtt:
       - Db
       - Outputs.PostgresDatabase
   PostgresSecretArn:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value:
       Fn::GetAtt:
       - Db
       - Outputs.PostgresSecretArn
-  ClickHousePrivateIp:
-    Condition: CreateNewEksCluster
+  ClickHouseEndpoint:
+    Condition: CreateBastion
     Value:
       Fn::GetAtt:
       - Db
-      - Outputs.ClickHousePrivateIp
+      - Outputs.ClickHouseEndpoint
   ClickHouseHttpPort:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value:
       Fn::GetAtt:
       - Db
       - Outputs.ClickHouseHttpPort
   ClickHouseNativePort:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value:
       Fn::GetAtt:
       - Db
       - Outputs.ClickHouseNativePort
   ClickHouseDatabase:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value:
       Fn::GetAtt:
       - Db
       - Outputs.ClickHouseDatabase
   ClickHouseSecretArn:
-    Condition: CreateNewEksCluster
+    Condition: CreateBastion
     Value:
       Fn::GetAtt:
       - Db
@@ -638,6 +607,26 @@ Outputs:
       Fn::GetAtt:
       - S3
       - Outputs.AthenaOutputLocation
+  CurReportName:
+    Value:
+      Fn::GetAtt:
+      - S3
+      - Outputs.CurReportName
+  CurLocation:
+    Value:
+      Fn::GetAtt:
+      - S3
+      - Outputs.CurLocation
+  CurAthenaDatabaseName:
+    Value:
+      Fn::GetAtt:
+      - S3
+      - Outputs.CurAthenaDatabaseName
+  CurAthenaTableName:
+    Value:
+      Fn::GetAtt:
+      - S3
+      - Outputs.CurAthenaTableName
   GlueDatabaseName:
     Value:
       Fn::GetAtt:
@@ -673,3 +662,27 @@ Outputs:
       Fn::GetAtt:
       - Iam
       - Outputs.AnalyticsIamPolicyArn
+  PublicSubnetIds:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Network
+      - Outputs.PublicSubnetIds
+  PrivateSubnetIds:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Network
+      - Outputs.PrivateSubnetIds
+  NatGatewayIds:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Network
+      - Outputs.NatGatewayIds
+  InternetGatewayId:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Network
+      - Outputs.InternetGatewayId

@@ -1,14 +1,27 @@
 # SpendSmart CloudFormation Deployment
 
-This folder contains the modular CloudFormation deployment of the infrastructure described by the Terraform configuration in the parent folder. It does not use or modify Terraform state. `main.yml` is the deployment entrypoint; its nested templates are under `modules/` and are uploaded with `aws cloudformation package`. `template.yaml` is a monolithic reference and is not the deployment entrypoint.
+This folder contains the modular CloudFormation deployment for SpendSmart. `main.yml` is the deployment entrypoint. Nested templates are under `modules/` and are uploaded with `aws cloudformation package`.
 
 For deployment commands and troubleshooting, see [ONE_CLICK_DEPLOYMENT.md](ONE_CLICK_DEPLOYMENT.md). For ownership boundaries and outputs, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## What It Creates
 
 - VPC, two public subnets, two private subnets in distinct AZs, internet gateway, and one NAT gateway/EIP when enabled.
-- Optional bastion host.
-- Private EKS cluster, two managed node groups, worker security group, and the VPC CNI, kube-proxy, CoreDNS, and Pod Identity Agent add-ons. Both node groups can place nodes in either private subnet.
+- Bastion host with kubectl. SSH in and run `kubectl get nodes` and `kubectl get pods -A`.
+- Private EKS cluster and two managed node groups. Node group 2 is the data node (`c7i-flex.xlarge`, 100 GB) and runs PostgreSQL and ClickHouse as in-cluster StatefulSets.
+- PostgreSQL service `postgres.databases.svc.cluster.local:5432` and ClickHouse service `clickhouse.databases.svc.cluster.local` on ports 8123 and 9000.
+
+## Database login
+
+| Database | Username | Password |
+|---|---|---|
+| PostgreSQL (`cloudsentry`) | `dbadmin` | Generated into Secrets Manager secret `spendsmart-dev/postgres` |
+| ClickHouse (`spendsmart`) | `default` | Generated into Secrets Manager secret `spendsmart-dev/clickhouse` |
+
+```sh
+aws secretsmanager get-secret-value --secret-id spendsmart-dev/postgres --region us-east-1 --query SecretString --output text
+aws secretsmanager get-secret-value --secret-id spendsmart-dev/clickhouse --region us-east-1 --query SecretString --output text
+```
 - AWS Load Balancer Controller IAM role and EKS Pod Identity association.
 - S3 data/results bucket, Glue database and role, Athena workgroup, and analytics IAM role/policy.
 

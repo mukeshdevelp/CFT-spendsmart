@@ -149,6 +149,15 @@ Resources:
 
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-bastion-role'
+        - Key: Project
+          Value: spendsmart
+        - Key: Environment
+          Value: dev
+        - Key: ManagedBy
+          Value: CFT
 
       Policies:
         - PolicyName: BastionEksAccess
@@ -197,6 +206,12 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}${BastionNameSuffix}'
+        - Key: Project
+          Value: spendsmart
+        - Key: Environment
+          Value: dev
+        - Key: ManagedBy
+          Value: CFT
   BastionInstance:
     Type: AWS::EC2::Instance
     Condition: CreateBastion
@@ -251,15 +266,21 @@ Resources:
           cp /home/ec2-user/.kube/config /root/.kube/config
           chmod 600 /root/.kube/config
 
+          cat >/usr/local/bin/refresh-kubeconfig <<EOF
+          #!/bin/bash
+          mkdir -p "\$HOME/.kube"
+          aws eks update-kubeconfig --region ${EksRegion} --name ${EksClusterName} --kubeconfig "\$HOME/.kube/config"
+          chmod 600 "\$HOME/.kube/config"
+          EOF
+          chmod 755 /usr/local/bin/refresh-kubeconfig
+          echo 'export KUBECONFIG=$HOME/.kube/config' >/etc/profile.d/eks.sh
+          echo '[ -s "$KUBECONFIG" ] || /usr/local/bin/refresh-kubeconfig' >>/etc/profile.d/eks.sh
+
           echo 'export KUBECONFIG=/home/ec2-user/.kube/config' >> /home/ec2-user/.bashrc
-          echo 'source <(kubectl completion bash)' >> /home/ec2-user/.bashrc
           echo 'alias k=kubectl' >> /home/ec2-user/.bashrc
-          echo 'complete -o default -F __start_kubectl k' >> /home/ec2-user/.bashrc
 
           echo 'export KUBECONFIG=/root/.kube/config' >> /root/.bashrc
-          echo 'source <(kubectl completion bash)' >> /root/.bashrc
           echo 'alias k=kubectl' >> /root/.bashrc
-          echo 'complete -o default -F __start_kubectl k' >> /root/.bashrc
 
           echo "Waiting for EKS Kubernetes access..."
 
@@ -275,6 +296,7 @@ Resources:
           echo "=========================================="
           echo "EKS access is ready."
           echo "Run: kubectl get nodes"
+          echo "Run: kubectl get pods -A"
           echo "=========================================="
       KeyName: !Ref Ec2KeyName
       SubnetId: !Ref PublicSubnetId
@@ -296,6 +318,12 @@ Resources:
           Value: !Sub '${NamePrefix}${BastionNameSuffix}'
         - Key: Role
           Value: !Ref BastionRoleTag
+        - Key: Project
+          Value: spendsmart
+        - Key: Environment
+          Value: dev
+        - Key: ManagedBy
+          Value: CFT
   BastionEip:
     Type: AWS::EC2::EIP
     Condition: CreateBastionEip
@@ -304,6 +332,12 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}${BastionEipNameSuffix}'
+        - Key: Project
+          Value: spendsmart
+        - Key: Environment
+          Value: dev
+        - Key: ManagedBy
+          Value: CFT
   BastionEipAssociation:
     Type: AWS::EC2::EIPAssociation
     Condition: CreateBastionEip
@@ -327,3 +361,6 @@ Outputs:
     Condition: CreateBastion
     Description: IAM role ARN used by the bastion
     Value: !GetAtt BastionRole.Arn
+  BastionRoleName:
+    Condition: CreateBastion
+    Value: !Ref BastionRole

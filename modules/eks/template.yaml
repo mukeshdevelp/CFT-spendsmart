@@ -194,6 +194,15 @@ Resources:
       ManagedPolicyArns:
         - !Ref EksClusterPolicyArn
         - !Ref EksVpcResourceControllerPolicyArn
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${EksClusterRoleNameSuffix}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CFT
 
   EksNodeRole:
     Type: AWS::IAM::Role
@@ -210,6 +219,15 @@ Resources:
         - !Ref EksNodeWorkerPolicyArn
         - !Ref EksNodeCniPolicyArn
         - !Ref EksNodeEcrPolicyArn
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${EksNodeRoleNameSuffix}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CFT
 
   EksCluster:
     Type: AWS::EKS::Cluster
@@ -230,6 +248,15 @@ Resources:
         EndpointPublicAccess: false
       UpgradePolicy:
         SupportType: STANDARD
+      Tags:
+        - Key: Name
+          Value: !Ref EksClusterName
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CFT
 
   EksAddonPodIdentityAgent:
     Type: AWS::EKS::Addon
@@ -280,6 +307,12 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}${EksNodesSecurityGroupNameSuffix}'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CFT
         - Key: !Sub '${EksClusterTagKeyPrefix}${EksClusterName}'
           Value: !Ref EksClusterTagValue
 
@@ -324,6 +357,77 @@ Resources:
       SourceSecurityGroupId: !Ref BastionSecurityGroupId
       Description: HTTPS from bastion to worker nodes
 
+  PostgresFromCluster:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EksNodesSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !GetAtt EksCluster.ClusterSecurityGroupId
+      Description: PostgreSQL from cluster pods
+
+  ClickHouseHttpFromCluster:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EksNodesSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8123
+      ToPort: 8123
+      SourceSecurityGroupId: !GetAtt EksCluster.ClusterSecurityGroupId
+      Description: ClickHouse HTTP from cluster pods
+
+  ClickHouseNativeFromCluster:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EksNodesSecurityGroup
+      IpProtocol: tcp
+      FromPort: 9000
+      ToPort: 9000
+      SourceSecurityGroupId: !GetAtt EksCluster.ClusterSecurityGroupId
+      Description: ClickHouse native from cluster pods
+
+  EksNodeLaunchTemplate1:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub '${NamePrefix}${EksNodeLaunchTemplateSuffix}1'
+      LaunchTemplateData:
+        SecurityGroupIds:
+          - !Ref EksNodesSecurityGroup
+          - !GetAtt EksCluster.ClusterSecurityGroupId
+        BlockDeviceMappings:
+          - DeviceName: !Ref EksNodeDeviceName
+            Ebs:
+              VolumeSize: !Ref EksNodeDiskSize
+              VolumeType: !Ref EksNodeDiskType
+              Encrypted: true
+              DeleteOnTermination: true
+        MetadataOptions:
+          HttpEndpoint: !Ref EksNodeMetadataEndpoint
+          HttpTokens: !Ref EksNodeMetadataTokens
+          HttpPutResponseHopLimit: !Ref EksNodeMetadataHopLimit
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub '${NamePrefix}${EksNodeInstanceNameSuffix}-1'
+              - Key: Project
+                Value: !Ref ProjectName
+              - Key: Environment
+                Value: !Ref Environment
+              - Key: ManagedBy
+                Value: CFT
+          - ResourceType: volume
+            Tags:
+              - Key: Name
+                Value: !Sub '${NamePrefix}${EksNodeInstanceNameSuffix}-1'
+              - Key: Project
+                Value: !Ref ProjectName
+              - Key: Environment
+                Value: !Ref Environment
+              - Key: ManagedBy
+                Value: CFT
+
   EksNodeGroupAz1:
     Type: AWS::EKS::Nodegroup
     DependsOn:
@@ -340,26 +444,22 @@ Resources:
         - !Ref EksNodeInstanceType
       AmiType: !Ref EksNodeAmiType
       CapacityType: !Ref EksNodeCapacityType
-      DiskSize: !Ref EksNodeDiskSize
+      LaunchTemplate:
+        Id: !Ref EksNodeLaunchTemplate1
+        Version: !GetAtt EksNodeLaunchTemplate1.LatestVersionNumber
       ScalingConfig:
         DesiredSize: !Ref EksNodeDesiredSize
         MinSize: !Ref EksNodeMinSize
         MaxSize: !Ref EksNodeMaxSize
       UpdateConfig:
         MaxUnavailable: !Ref EksNodeUpdateMaxUnavailable
+      Labels:
+        spendsmart.io/role: app
       Tags:
         Name: !Sub '${NamePrefix}${EksNodeGroupTagNameSuffix}1'
-
-  EksNodeGroup2SecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Identity security group for node group 2 database access
-      VpcId: !Ref VpcId
-      Tags:
-        - Key: Name
-          Value: !Sub '${NamePrefix}-eks-ng2'
-        - Key: !Sub '${EksClusterTagKeyPrefix}${EksClusterName}'
-          Value: !Ref EksClusterTagValue
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        ManagedBy: CFT
 
   EksNodeGroup2LaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
@@ -369,18 +469,40 @@ Resources:
         SecurityGroupIds:
           - !Ref EksNodesSecurityGroup
           - !GetAtt EksCluster.ClusterSecurityGroupId
-          - !Ref EksNodeGroup2SecurityGroup
         BlockDeviceMappings:
           - DeviceName: !Ref EksNodeDeviceName
             Ebs:
-              VolumeSize: !Ref EksNodeDiskSize
-              VolumeType: !Ref EksNodeDiskType
+              VolumeSize: 100
+              VolumeType: gp3
               Encrypted: true
               DeleteOnTermination: true
         MetadataOptions:
           HttpEndpoint: !Ref EksNodeMetadataEndpoint
           HttpTokens: !Ref EksNodeMetadataTokens
           HttpPutResponseHopLimit: !Ref EksNodeMetadataHopLimit
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub '${NamePrefix}${EksNodeInstanceNameSuffix}-2'
+              - Key: Project
+                Value: !Ref ProjectName
+              - Key: Environment
+                Value: !Ref Environment
+              - Key: ManagedBy
+                Value: CFT
+              - Key: NodeGroup
+                Value: node-group-2
+          - ResourceType: volume
+            Tags:
+              - Key: Name
+                Value: !Sub '${NamePrefix}${EksNodeInstanceNameSuffix}-2'
+              - Key: Project
+                Value: !Ref ProjectName
+              - Key: Environment
+                Value: !Ref Environment
+              - Key: ManagedBy
+                Value: CFT
 
   EksNodeGroupAz2:
     Type: AWS::EKS::Nodegroup
@@ -395,7 +517,7 @@ Resources:
       Subnets:
         - !Ref PrivateSubnet2Id
       InstanceTypes:
-        - !Ref EksNodeInstanceType
+        - c7i-flex.xlarge
       AmiType: !Ref EksNodeAmiType
       CapacityType: !Ref EksNodeCapacityType
       LaunchTemplate:
@@ -409,8 +531,15 @@ Resources:
         MaxUnavailable: !Ref EksNodeUpdateMaxUnavailable
       Labels:
         spendsmart.io/role: data
+      Taints:
+        - Key: spendsmart.io/role
+          Value: data
+          Effect: NO_SCHEDULE
       Tags:
         Name: !Sub '${NamePrefix}${EksNodeGroupTagNameSuffix}2'
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        ManagedBy: CFT
 
   AlbControllerRole:
     Type: AWS::IAM::Role
@@ -541,6 +670,15 @@ Resources:
                   - elasticloadbalancing:RemoveListenerCertificates
                   - elasticloadbalancing:ModifyRule
                 Resource: '*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}${AlbControllerIamPolicyNameSuffix}-role'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CFT
 
   AlbControllerPodIdentityAssociation:
     Type: AWS::EKS::PodIdentityAssociation
@@ -582,5 +720,3 @@ Outputs:
     Value: !Sub '${EksNodeGroupNamePrefix}1'
   EksNodeGroup2Name:
     Value: !Sub '${EksNodeGroupNamePrefix}2'
-  EksNodeGroup2SecurityGroupId:
-    Value: !Ref EksNodeGroup2SecurityGroup

@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: SpendSmart s3 nested stack
+Description: SpendSmart S3 bucket, Athena results prefix, and hourly Parquet Cost and Usage Report. The CUR resource must be deployed in us-east-1.
 Parameters:
   # project nmae
   ProjectName:
@@ -113,10 +113,62 @@ Resources:
               ExpirationInDays: !Ref AthenaResultsExpirationDays
         - !Ref 'AWS::NoValue'
       Tags:
+        - Key: Name
+          Value: !Ref S3BucketName
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CFT
+
+  CurBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCurReadBucket
+            Effect: Allow
+            Principal:
+              Service: billingreports.amazonaws.com
+            Action:
+              - s3:GetBucketAcl
+              - s3:GetBucketPolicy
+            Resource: !GetAtt DataBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cur:us-east-1:${AWS::AccountId}:definition/*'
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: AllowCurWriteObjects
+            Effect: Allow
+            Principal:
+              Service: billingreports.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${DataBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cur:us-east-1:${AWS::AccountId}:definition/*'
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  CostAndUsageReport:
+    Type: AWS::CUR::ReportDefinition
+    DependsOn: CurBucketPolicy
+    Properties:
+      ReportName: spendsmart-cur
+      TimeUnit: HOURLY
+      Format: Parquet
+      Compression: Parquet
+      AdditionalSchemaElements:
+        - RESOURCES
+      S3Bucket: !Ref DataBucket
+      S3Prefix: cur
+      S3Region: !Ref AWS::Region
+      AdditionalArtifacts:
+        - ATHENA
+      RefreshClosedReports: true
+      ReportVersioning: OVERWRITE_REPORT
 
 Outputs:
   BucketName:
@@ -127,3 +179,11 @@ Outputs:
     Value: !Sub 's3://${DataBucket}/${AthenaResultsPrefix}/'
   BucketArn:
     Value: !GetAtt DataBucket.Arn
+  CurReportName:
+    Value: spendsmart-cur
+  CurLocation:
+    Value: !Sub 's3://${DataBucket}/cur/spendsmart-cur/'
+  CurAthenaDatabaseName:
+    Value: athenacurcfn_spendsmart_cur
+  CurAthenaTableName:
+    Value: spendsmart_cur
