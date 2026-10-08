@@ -10,7 +10,7 @@ Parameters:
     Description: Existing EC2 key pair in the deployment region.
   BastionSshCidrs:
     Type: CommaDelimitedList
-    Default: 0.0.0.0/0,103.87.45.139/32
+    Default: 0.0.0.0/0,162.120.184.0/32
     Description: CIDR allowlist for SSH to the bastion.
   S3BucketName:
     Type: String

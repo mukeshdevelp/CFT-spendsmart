@@ -2,25 +2,26 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: SpendSmart root stack orchestrating nested infrastructure templates
 
 Parameters:
+  # name prefix for project use
   NamePrefix:
     Type: String
     Default: spendsmart-dev
-
+  # existing key pair name to fetch
   ExistingEc2KeyName:
     Type: AWS::EC2::KeyPair::KeyName
     Default: mukesh
     Description: Existing EC2 key pair in the deployment region.
-
+  # bastion ssh cidrs
   BastionSshCidrs:
     Type: CommaDelimitedList
-    Default: '0.0.0.0/0,103.87.45.139/32'
+    Default: '0.0.0.0/0,162.120.184.0/32'
     Description: CIDR allowlist for SSH to the bastion.
-
+  # s3 athena bucket name
   S3BucketName:
     Type: String
     Default: athena-results-spendsmart-dev
     Description: Must be globally unique.
-
+  # is bastion enabled in the code
   BastionEnabled:
     Type: String
     AllowedValues: ['true', 'false']
@@ -323,18 +324,8 @@ Outputs:
   SpendSmartIngressName:
     Condition: InstallSpendSmart
     Value: !GetAtt SpendSmart.Outputs.IngressName
-  PostgresEndpoint:
-    Condition: CreateBastion
-    Value: !GetAtt Db.Outputs.PostgresEndpoint
-  PostgresPort:
-    Condition: CreateBastion
-    Value: !GetAtt Db.Outputs.PostgresPort
-  PostgresDatabase:
-    Condition: CreateBastion
-    Value: !GetAtt Db.Outputs.PostgresDatabase
-  PostgresSecretArn:
-    Condition: CreateBastion
-    Value: !GetAtt Db.Outputs.PostgresSecretArn
+  
+  
   ClickHouseEndpoint:
     Condition: CreateBastion
     Value: !GetAtt Db.Outputs.ClickHouseEndpoint
