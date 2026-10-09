@@ -26,7 +26,7 @@ Parameters:
     Type: String
     AllowedValues: ['true', 'false']
     Default: 'true'
-
+  # selection of ec2 key pair mode
   Ec2KeyPairMode:
     Type: String
     AllowedValues: [Existing, CreateNew]

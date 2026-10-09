@@ -239,17 +239,24 @@ Resources:
 
       DeleteCommand: !Sub |
         set +e
+        export HOME=/root
+        export KUBECONFIG=/root/.kube/config
+        mkdir -p /root/.kube
 
         aws eks update-kubeconfig \
           --region ${AWS::Region} \
-          --name ${ClusterName}
+          --name ${ClusterName} \
+          --kubeconfig "$KUBECONFIG"
 
-        kubectl delete namespace databases --wait=false
+        kubectl --kubeconfig "$KUBECONFIG" delete namespace databases --wait=false
 
         exit 0
 
       ApplyCommand: !Sub |
         set -euo pipefail
+        export HOME=/root
+        export KUBECONFIG=/root/.kube/config
+        mkdir -p /root/.kube
 
         if ! command -v kubectl >/dev/null 2>&1; then
           curl -fsSL \
@@ -261,7 +268,8 @@ Resources:
 
         aws eks update-kubeconfig \
           --region ${AWS::Region} \
-          --name ${ClusterName}
+          --name ${ClusterName} \
+          --kubeconfig "$KUBECONFIG"
 
         ready=0
 
@@ -269,7 +277,7 @@ Resources:
                  11 12 13 14 15 16 17 18 19 20 \
                  21 22 23 24 25 26 27 28 29 30; do
 
-          if kubectl get nodes; then
+          if kubectl --kubeconfig "$KUBECONFIG" get nodes; then
             ready=1
             break
           fi

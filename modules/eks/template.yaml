@@ -472,8 +472,8 @@ Resources:
         BlockDeviceMappings:
           - DeviceName: !Ref EksNodeDeviceName
             Ebs:
-              VolumeSize: 100
-              VolumeType: gp3
+              VolumeSize: !Ref EksNodeDiskSize
+              VolumeType: !Ref EksNodeDiskType
               Encrypted: true
               DeleteOnTermination: true
         MetadataOptions:
@@ -517,7 +517,7 @@ Resources:
       Subnets:
         - !Ref PrivateSubnet2Id
       InstanceTypes:
-        - c7i-flex.xlarge
+        - !Ref EksNodeInstanceType
       AmiType: !Ref EksNodeAmiType
       CapacityType: !Ref EksNodeCapacityType
       LaunchTemplate:

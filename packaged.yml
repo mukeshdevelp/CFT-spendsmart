@@ -190,7 +190,7 @@ Resources:
     DependsOn:
     - Network
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/6a0b450b380e12c86dc33e6016fb816f.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/bc27655976793564c8ac10dbed71728f.template
       Parameters:
         ProjectName: spendsmart
         NamePrefix:
@@ -224,7 +224,7 @@ Resources:
     - Bastion
     - BastionEksAccessEntry
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/7d6a788c191595d6865bfc044aaf830b.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/0fbce25b0118340928f09be9e2139ba1.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix
@@ -533,30 +533,6 @@ Outputs:
       Fn::GetAtt:
       - SpendSmart
       - Outputs.IngressName
-  PostgresEndpoint:
-    Condition: CreateBastion
-    Value:
-      Fn::GetAtt:
-      - Db
-      - Outputs.PostgresEndpoint
-  PostgresPort:
-    Condition: CreateBastion
-    Value:
-      Fn::GetAtt:
-      - Db
-      - Outputs.PostgresPort
-  PostgresDatabase:
-    Condition: CreateBastion
-    Value:
-      Fn::GetAtt:
-      - Db
-      - Outputs.PostgresDatabase
-  PostgresSecretArn:
-    Condition: CreateBastion
-    Value:
-      Fn::GetAtt:
-      - Db
-      - Outputs.PostgresSecretArn
   ClickHouseEndpoint:
     Condition: CreateBastion
     Value:
