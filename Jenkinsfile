@@ -216,17 +216,15 @@ PY
 
   post {
     failure {
-      steps {
-        script {
-          withAwsCredentials {
-            sh '''
-              set +e
-              aws cloudformation describe-stack-events --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
-                --max-items 20 \
-                --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[Timestamp,LogicalResourceId,ResourceStatusReason]' \
-                --output table
-            '''
-          }
+      script {
+        withAwsCredentials {
+          sh '''
+            set +e
+            aws cloudformation describe-stack-events --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+              --max-items 20 \
+              --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[Timestamp,LogicalResourceId,ResourceStatusReason]' \
+              --output table
+          '''
         }
       }
     }

@@ -370,17 +370,15 @@ pipeline {
 
   post {
     failure {
-      steps {
-        script {
-          withAwsCredentials {
-            sh '''
-              set +e
-              aws cloudformation describe-stack-events --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" \
-                --max-items 15 \
-                --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[LogicalResourceId,ResourceStatusReason]' \
-                --output table
-            '''
-          }
+      script {
+        withAwsCredentials {
+          sh '''
+            set +e
+            aws cloudformation describe-stack-events --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" \
+              --max-items 15 \
+              --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[LogicalResourceId,ResourceStatusReason]' \
+              --output table
+          '''
         }
       }
     }
