@@ -65,7 +65,8 @@ pipeline {
             sh '''
             set -eu
             command -v aws python3 >/dev/null
-            test -f main.yml parameters.json
+            test -f main.yml 
+            test -f parameters.json
             test -n "${CFN_TEMPLATE_BUCKET}"
             aws sts get-caller-identity
             aws s3api head-bucket --bucket "${CFN_TEMPLATE_BUCKET}"
