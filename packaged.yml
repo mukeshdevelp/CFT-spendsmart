@@ -61,6 +61,23 @@ Parameters:
     Default: spendsmart-cfn-packages
     Description: S3 bucket for packaged nested templates and bastion bootstrap assets
       (bastion-assets/).
+  DeploySpendSmart:
+    Type: String
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Default: 'true'
+    Description: Deploy SpendSmart (Helm frontend/backend + Keycloak) via modules/spendsmart.
+  HarborUsername:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: Harbor robot/user for private images (required when DeploySpendSmart=true).
+  HarborPassword:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: Harbor password for HarborUsername.
 Rules:
   ExistingEksInputsRequired:
     RuleCondition:
@@ -121,6 +138,12 @@ Conditions:
       - Fn::Select:
         - 0
         - Ref: BastionSshCidrs
+  DeploySpendSmartApp:
+    Fn::And:
+    - Condition: CreateNewEksCluster
+    - Fn::Equals:
+      - Ref: DeploySpendSmart
+      - 'true'
 Resources:
   GeneratedEc2KeyPair:
     Type: AWS::EC2::KeyPair
@@ -235,7 +258,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Condition: CreateNewEksCluster
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/3dbdca95a8845a7156e0a08d05ea2ef1.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/11dd0c8bfc2dbe062d13e34f59fe14d6.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix
@@ -246,7 +269,7 @@ Resources:
     - Network
     - Eks
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/38d86c05953e5b96f628a550d192d4e0.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/0e346d2a14d395fc66c48dd51afb1699.template
       Parameters:
         ProjectName: spendsmart
         NamePrefix:
@@ -278,10 +301,15 @@ Resources:
           - Eks
           - Outputs.EksNodesSecurityGroupId
         AlbName: spendsmart-dev-alb
-        AlbTargetGroupName: spendsmart-dev-tg
-        AlbListenerPort: 80
-        AlbTargetPort: 30080
-        AlbHealthCheckPath: /healthz
+        FrontendListenerPort: 8080
+        FrontendTargetPort: 30080
+        FrontendHealthCheckPath: /
+        BackendListenerPort: 8081
+        BackendTargetPort: 30081
+        BackendHealthCheckPath: /api/v1/healthz
+        KeycloakListenerPort: 8083
+        KeycloakTargetPort: 30083
+        KeycloakHealthCheckPath: /
         NodeGroup1Name:
           Fn::GetAtt:
           - Eks
@@ -290,6 +318,42 @@ Resources:
           Fn::GetAtt:
           - Eks
           - Outputs.EksNodeGroup2Name
+  SpendSmart:
+    Type: AWS::CloudFormation::Stack
+    Condition: DeploySpendSmartApp
+    DependsOn:
+    - Eks
+    - Db
+    - Alb
+    - Bastion
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/f725692a33e946d5a7eb25713b2b1945.template
+      Parameters:
+        NamePrefix:
+          Ref: NamePrefix
+        ClusterName: spendsmart
+        ClusterSecurityGroupId:
+          Fn::GetAtt:
+          - Eks
+          - Outputs.EksClusterSecurityGroupId
+        VpcId:
+          Fn::GetAtt:
+          - Network
+          - Outputs.VpcId
+        PrivateSubnetId:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PrivateSubnet1Id
+        AlbDnsName:
+          Fn::GetAtt:
+          - Alb
+          - Outputs.AlbDnsName
+        ClickHouseSecretName:
+          Fn::Sub: ${NamePrefix}/clickhouse
+        HarborUsername:
+          Ref: HarborUsername
+        HarborPassword:
+          Ref: HarborPassword
   S3:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -523,6 +587,24 @@ Outputs:
       Fn::GetAtt:
       - Alb
       - Outputs.AlbDnsName
+  SpendSmartFrontendUrl:
+    Condition: DeploySpendSmartApp
+    Value:
+      Fn::GetAtt:
+      - SpendSmart
+      - Outputs.FrontendUrl
+  SpendSmartBackendUrl:
+    Condition: DeploySpendSmartApp
+    Value:
+      Fn::GetAtt:
+      - SpendSmart
+      - Outputs.BackendUrl
+  SpendSmartKeycloakUrl:
+    Condition: DeploySpendSmartApp
+    Value:
+      Fn::GetAtt:
+      - SpendSmart
+      - Outputs.KeycloakUrl
   BucketName:
     Value:
       Fn::GetAtt:

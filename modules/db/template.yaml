@@ -65,3 +65,5 @@ Outputs:
     Value: '9000'
   ClickHouseDatabase:
     Value: spendsmart
+  ClickHouseUsername:
+    Value: default

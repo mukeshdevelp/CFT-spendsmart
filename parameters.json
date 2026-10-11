@@ -10,5 +10,17 @@
   {
     "ParameterKey": "S3BucketName",
     "ParameterValue": "athena-results-spendsmart-dev"
+  },
+  {
+    "ParameterKey": "DeploySpendSmart",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "HarborUsername",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "HarborPassword",
+    "ParameterValue": ""
   }
 ]

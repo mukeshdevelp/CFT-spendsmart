@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: SpendSmart Application Load Balancer with automatic node registration
+Description: SpendSmart ALB — listeners 8080 (frontend), 8081 (backend), 8083 (keycloak)
 
 Parameters:
   ProjectName:
@@ -14,31 +14,43 @@ Parameters:
     Type: AWS::EC2::Subnet::Id
   PublicSubnet2Id:
     Type: AWS::EC2::Subnet::Id
-  PrivateSubnet1Id:
-    Type: AWS::EC2::Subnet::Id
-  PrivateSubnet2Id:
-    Type: AWS::EC2::Subnet::Id
   EksClusterName:
     Type: String
   NodeGroup1Name:
     Type: String
-    Description: Name of the first managed node group.
   NodeGroup2Name:
     Type: String
-    Description: Name of the second managed node group.
   NodesSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
-    Description: Security group attached to the worker nodes (use the EKS cluster security group).
   AlbName:
     Type: String
-  AlbTargetGroupName:
-    Type: String
-  AlbListenerPort:
+  FrontendListenerPort:
     Type: Number
-  AlbTargetPort:
+    Default: 8080
+  FrontendTargetPort:
     Type: Number
-  AlbHealthCheckPath:
+    Default: 30080
+  FrontendHealthCheckPath:
     Type: String
+    Default: /
+  BackendListenerPort:
+    Type: Number
+    Default: 8081
+  BackendTargetPort:
+    Type: Number
+    Default: 30081
+  BackendHealthCheckPath:
+    Type: String
+    Default: /api/v1/healthz
+  KeycloakListenerPort:
+    Type: Number
+    Default: 8083
+  KeycloakTargetPort:
+    Type: Number
+    Default: 30083
+  KeycloakHealthCheckPath:
+    Type: String
+    Default: /
 
 Resources:
   AlbSecurityGroup:
@@ -48,16 +60,22 @@ Resources:
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: !Ref AlbListenerPort
-          ToPort: !Ref AlbListenerPort
+          FromPort: !Ref FrontendListenerPort
+          ToPort: !Ref FrontendListenerPort
           CidrIp: 0.0.0.0/0
-          Description: HTTP from internet
+        - IpProtocol: tcp
+          FromPort: !Ref BackendListenerPort
+          ToPort: !Ref BackendListenerPort
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: !Ref KeycloakListenerPort
+          ToPort: !Ref KeycloakListenerPort
+          CidrIp: 0.0.0.0/0
       SecurityGroupEgress:
         - IpProtocol: tcp
-          FromPort: !Ref AlbTargetPort
-          ToPort: !Ref AlbTargetPort
+          FromPort: !Ref FrontendTargetPort
+          ToPort: !Ref KeycloakTargetPort
           DestinationSecurityGroupId: !Ref NodesSecurityGroupId
-          Description: ALB to worker node port
       Tags:
         - Key: Name
           Value: !Sub '${NamePrefix}-alb-sg'
@@ -68,16 +86,15 @@ Resources:
         - Key: ManagedBy
           Value: CFT
 
-  # Lets the ALB reach the NodePort on the worker nodes
   AlbToNodesIngress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       GroupId: !Ref NodesSecurityGroupId
       IpProtocol: tcp
-      FromPort: !Ref AlbTargetPort
-      ToPort: !Ref AlbTargetPort
+      FromPort: !Ref FrontendTargetPort
+      ToPort: !Ref KeycloakTargetPort
       SourceSecurityGroupId: !Ref AlbSecurityGroup
-      Description: ALB to SpendSmart NodePort
+      Description: ALB to SpendSmart NodePorts
 
   SpendSmartAlb:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
@@ -99,49 +116,72 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  SpendSmartTargetGroup:
+  FrontendTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Ref AlbTargetGroupName
+      Name: !Sub '${NamePrefix}-fe-tg'
       VpcId: !Ref VpcId
       Protocol: HTTP
-      Port: !Ref AlbTargetPort
+      Port: !Ref FrontendTargetPort
       TargetType: instance
-      HealthCheckEnabled: true
-      HealthCheckProtocol: HTTP
-      HealthCheckPort: traffic-port
-      HealthCheckPath: !Ref AlbHealthCheckPath
-      HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 3
-      HealthCheckIntervalSeconds: 30
-      HealthCheckTimeoutSeconds: 5
+      HealthCheckPath: !Ref FrontendHealthCheckPath
       Matcher:
         HttpCode: '200-399'
-      Tags:
-        - Key: Name
-          Value: !Sub '${NamePrefix}-target-group'
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          Value: CFT
 
-  SpendSmartAlbListener:
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${NamePrefix}-be-tg'
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: !Ref BackendTargetPort
+      TargetType: instance
+      HealthCheckPath: !Ref BackendHealthCheckPath
+      Matcher:
+        HttpCode: '200-399'
+
+  KeycloakTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${NamePrefix}-kc-tg'
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: !Ref KeycloakTargetPort
+      TargetType: instance
+      HealthCheckPath: !Ref KeycloakHealthCheckPath
+      Matcher:
+        HttpCode: '200-399'
+
+  FrontendListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       LoadBalancerArn: !Ref SpendSmartAlb
-      Port: !Ref AlbListenerPort
+      Port: !Ref FrontendListenerPort
       Protocol: HTTP
       DefaultActions:
         - Type: forward
-          TargetGroupArn: !Ref SpendSmartTargetGroup
+          TargetGroupArn: !Ref FrontendTargetGroup
 
-  # ---------------------------------------------------------------
-  # Target registration: attach the node groups' Auto Scaling groups
-  # to the target group. The ASG then registers/deregisters instances
-  # automatically as nodes are launched or replaced.
-  # ---------------------------------------------------------------
+  BackendListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref SpendSmartAlb
+      Port: !Ref BackendListenerPort
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+
+  KeycloakListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref SpendSmartAlb
+      Port: !Ref KeycloakListenerPort
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref KeycloakTargetGroup
+
   TargetRegistrationRole:
     Type: AWS::IAM::Role
     Properties:
@@ -155,7 +195,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: attach-nodegroup-asg-to-target-group
+        - PolicyName: attach-nodegroup-asg-to-target-groups
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -163,26 +203,13 @@ Resources:
                 Action:
                   - eks:DescribeNodegroup
                   - autoscaling:DescribeAutoScalingGroups
-                  - autoscaling:DescribeLoadBalancerTargetGroups
                   - autoscaling:AttachLoadBalancerTargetGroups
                   - autoscaling:DetachLoadBalancerTargetGroups
-                  - elasticloadbalancing:DescribeTargetGroups
                 Resource: '*'
-      Tags:
-        - Key: Name
-          Value: !Sub '${NamePrefix}-alb-target-registration'
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: ManagedBy
-          
-          Value: CFT
 
   TargetRegistrationFunction:
     Type: AWS::Lambda::Function
     Properties:
-      Description: Attaches EKS managed node group ASGs to the ALB target group
       Runtime: python3.12
       Handler: index.handler
       Timeout: 300
@@ -195,7 +222,6 @@ Resources:
           eks = boto3.client('eks')
           asg = boto3.client('autoscaling')
 
-
           def asg_names(cluster, groups):
               names = []
               for g in groups:
@@ -204,35 +230,34 @@ Resources:
                   names += [a['name'] for a in ng['resources']['autoScalingGroups']]
               return names
 
-
-          def attach(cluster, groups, tg):
+          def attach(cluster, groups, tgs):
               for name in asg_names(cluster, groups):
                   asg.attach_load_balancer_target_groups(
-                      AutoScalingGroupName=name, TargetGroupARNs=[tg])
+                      AutoScalingGroupName=name, TargetGroupARNs=tgs)
 
-
-          def detach(cluster, groups, tg):
+          def detach(cluster, groups, tgs):
               try:
                   for name in asg_names(cluster, groups):
                       asg.detach_load_balancer_target_groups(
-                          AutoScalingGroupName=name, TargetGroupARNs=[tg])
-              except Exception as e:  # node group or ASG may already be gone
+                          AutoScalingGroupName=name, TargetGroupARNs=tgs)
+              except Exception as e:
                   print('detach skipped:', e)
-
 
           def handler(event, context):
               try:
                   p = event['ResourceProperties']
                   req = event['RequestType']
+                  tgs = p['TargetGroupArns']
                   if req == 'Create':
-                      attach(p['ClusterName'], p['NodeGroupNames'], p['TargetGroupArn'])
+                      attach(p['ClusterName'], p['NodeGroupNames'], tgs)
                   elif req == 'Update':
                       old = event.get('OldResourceProperties', {})
-                      if old.get('TargetGroupArn') and old['TargetGroupArn'] != p['TargetGroupArn']:
-                          detach(old['ClusterName'], old['NodeGroupNames'], old['TargetGroupArn'])
-                      attach(p['ClusterName'], p['NodeGroupNames'], p['TargetGroupArn'])
+                      old_tgs = old.get('TargetGroupArns', [])
+                      if old_tgs:
+                          detach(old['ClusterName'], old['NodeGroupNames'], old_tgs)
+                      attach(p['ClusterName'], p['NodeGroupNames'], tgs)
                   elif req == 'Delete':
-                      detach(p['ClusterName'], p['NodeGroupNames'], p['TargetGroupArn'])
+                      detach(p['ClusterName'], p['NodeGroupNames'], tgs)
                   cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
               except Exception as e:
                   print('error:', e)
@@ -241,26 +266,43 @@ Resources:
   TargetRegistration:
     Type: Custom::TargetGroupRegistration
     DependsOn:
-      - SpendSmartTargetGroup
-      - SpendSmartAlbListener
+      - FrontendListener
+      - BackendListener
+      - KeycloakListener
     Properties:
       ServiceToken: !GetAtt TargetRegistrationFunction.Arn
       ClusterName: !Ref EksClusterName
-      TargetGroupArn: !Ref SpendSmartTargetGroup
+      TargetGroupArns:
+        - !Ref FrontendTargetGroup
+        - !Ref BackendTargetGroup
+        - !Ref KeycloakTargetGroup
       NodeGroupNames:
         - !Ref NodeGroup1Name
         - !Ref NodeGroup2Name
 
 Outputs:
   AlbDnsName:
-    Description: SpendSmart ALB DNS name
     Value: !GetAtt SpendSmartAlb.DNSName
   AlbArn:
-    Description: SpendSmart ALB ARN
     Value: !Ref SpendSmartAlb
-  TargetGroupArn:
-    Description: SpendSmart target group ARN
-    Value: !Ref SpendSmartTargetGroup
-  AlbSecurityGroupId:
-    Description: SpendSmart ALB security group
-    Value: !Ref AlbSecurityGroup
+  FrontendUrl:
+    Value: !Sub
+      - 'http://${Dns}:${Port}'
+      - Dns: !GetAtt SpendSmartAlb.DNSName
+        Port: !Ref FrontendListenerPort
+  BackendUrl:
+    Value: !Sub
+      - 'http://${Dns}:${Port}'
+      - Dns: !GetAtt SpendSmartAlb.DNSName
+        Port: !Ref BackendListenerPort
+  KeycloakUrl:
+    Value: !Sub
+      - 'http://${Dns}:${Port}'
+      - Dns: !GetAtt SpendSmartAlb.DNSName
+        Port: !Ref KeycloakListenerPort
+  FrontendTargetPort:
+    Value: !Ref FrontendTargetPort
+  BackendTargetPort:
+    Value: !Ref BackendTargetPort
+  KeycloakTargetPort:
+    Value: !Ref KeycloakTargetPort

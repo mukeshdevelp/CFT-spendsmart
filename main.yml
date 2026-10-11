@@ -67,6 +67,24 @@ Parameters:
     Default: spendsmart-cfn-packages
     Description: S3 bucket for packaged nested templates and bastion bootstrap assets (bastion-assets/).
 
+  DeploySpendSmart:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    Description: Deploy SpendSmart (Helm frontend/backend + Keycloak) via modules/spendsmart.
+
+  HarborUsername:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: Harbor robot/user for private images (required when DeploySpendSmart=true).
+
+  HarborPassword:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: Harbor password for HarborUsername.
+
 Rules:
   ExistingEksInputsRequired:
     RuleCondition: !Equals [!Ref EksClusterMode, UseExisting]
@@ -91,6 +109,9 @@ Conditions:
     - !Equals
       - !Join [',', !Ref BastionSshCidrs]
       - !Select [0, !Ref BastionSshCidrs]
+  DeploySpendSmartApp: !And
+    - !Condition CreateNewEksCluster
+    - !Equals [!Ref DeploySpendSmart, 'true']
 
 Resources:
   GeneratedEc2KeyPair:
@@ -185,12 +206,38 @@ Resources:
         EksClusterName: spendsmart
         NodesSecurityGroupId: !GetAtt Eks.Outputs.EksNodesSecurityGroupId
         AlbName: spendsmart-dev-alb
-        AlbTargetGroupName: spendsmart-dev-tg
-        AlbListenerPort: 80
-        AlbTargetPort: 30080
-        AlbHealthCheckPath: /healthz
+        FrontendListenerPort: 8080
+        FrontendTargetPort: 30080
+        FrontendHealthCheckPath: /
+        BackendListenerPort: 8081
+        BackendTargetPort: 30081
+        BackendHealthCheckPath: /api/v1/healthz
+        KeycloakListenerPort: 8083
+        KeycloakTargetPort: 30083
+        KeycloakHealthCheckPath: /
         NodeGroup1Name: !GetAtt Eks.Outputs.EksNodeGroup1Name
         NodeGroup2Name: !GetAtt Eks.Outputs.EksNodeGroup2Name
+
+  SpendSmart:
+    Type: AWS::CloudFormation::Stack
+    Condition: DeploySpendSmartApp
+    DependsOn:
+      - Eks
+      - Db
+      - Alb
+      - Bastion
+    Properties:
+      TemplateURL: ./modules/spendsmart/template.yaml
+      Parameters:
+        NamePrefix: !Ref NamePrefix
+        ClusterName: spendsmart
+        ClusterSecurityGroupId: !GetAtt Eks.Outputs.EksClusterSecurityGroupId
+        VpcId: !GetAtt Network.Outputs.VpcId
+        PrivateSubnetId: !GetAtt Network.Outputs.PrivateSubnet1Id
+        AlbDnsName: !GetAtt Alb.Outputs.AlbDnsName
+        ClickHouseSecretName: !Sub '${NamePrefix}/clickhouse'
+        HarborUsername: !Ref HarborUsername
+        HarborPassword: !Ref HarborPassword
 
   S3:
     Type: AWS::CloudFormation::Stack
@@ -316,6 +363,15 @@ Outputs:
   AlbDnsName:
     Condition: CreateNewEksCluster
     Value: !GetAtt Alb.Outputs.AlbDnsName
+  SpendSmartFrontendUrl:
+    Condition: DeploySpendSmartApp
+    Value: !GetAtt SpendSmart.Outputs.FrontendUrl
+  SpendSmartBackendUrl:
+    Condition: DeploySpendSmartApp
+    Value: !GetAtt SpendSmart.Outputs.BackendUrl
+  SpendSmartKeycloakUrl:
+    Condition: DeploySpendSmartApp
+    Value: !GetAtt SpendSmart.Outputs.KeycloakUrl
   BucketName:
     Value: !GetAtt S3.Outputs.BucketName
   BucketArn:

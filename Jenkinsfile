@@ -53,6 +53,16 @@ pipeline {
       defaultValue: 'spendsmart-ansible-deploy',
       description: 'Jenkins job name that uses Jenkinsfile.ansible'
     )
+    booleanParam(
+      name: 'DEPLOY_SPENDSMART',
+      defaultValue: true,
+      description: 'Nested SpendSmart stack (Helm + Keycloak); requires Harbor credentials'
+    )
+    string(
+      name: 'CREDENTIAL_HARBOR',
+      defaultValue: 'harbor-creds',
+      description: 'Jenkins Username/password — same as docker login harbor.ldc.opstree.dev'
+    )
   }
 
   environment {
@@ -88,39 +98,29 @@ pipeline {
     }
 
     
-stage('Prepare deploy parameters') {
-    steps {
-        sh '''
+    stage('Prepare deploy parameters') {
+      steps {
+        script {
+          def harborCredId = params.CREDENTIAL_HARBOR?.trim() ?: 'harbor-creds'
+          withCredentials([usernamePassword(
+            credentialsId: harborCredId,
+            usernameVariable: 'HARBOR_USERNAME',
+            passwordVariable: 'HARBOR_PASSWORD',
+          )]) {
+            sh '''
             set -eu
-
-            python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-
-overrides = {
-    "ExistingEc2KeyName": os.environ["EXISTING_EC2_KEY_NAME"],
-    "BastionSshCidrs": os.environ["BASTION_SSH_CIDRS"],
-    "S3BucketName": os.environ["S3_BUCKET_NAME"],
-    "CfnTemplateBucket": os.environ["CFN_TEMPLATE_BUCKET"],
-}
-
-base = json.loads(Path("parameters.json").read_text())
-by_key = {p["ParameterKey"]: p for p in base}
-
-for key, value in overrides.items():
-    by_key[key] = {
-        "ParameterKey": key,
-        "ParameterValue": value,
+            export EXISTING_EC2_KEY_NAME="${EXISTING_EC2_KEY_NAME}"
+            export BASTION_SSH_CIDRS="${BASTION_SSH_CIDRS}"
+            export S3_BUCKET_NAME="${S3_BUCKET_NAME}"
+            export CFN_TEMPLATE_BUCKET="${CFN_TEMPLATE_BUCKET}"
+            export DEPLOY_SPENDSMART="${DEPLOY_SPENDSMART}"
+            export CFN_PARAMETERS_OUT="${DEPLOY_PARAMETERS}"
+            python3 scripts/merge-cfn-parameters.py
+            '''
+          }
+        }
+      }
     }
-
-Path(os.environ["DEPLOY_PARAMETERS"]).write_text(
-    json.dumps(list(by_key.values()), indent=2) + "\\n"
-)
-PY
-        '''
-    }
-}
 
 
     stage('Upload bastion bootstrap assets') {
