@@ -112,6 +112,15 @@ Conditions:
     - Fn::Equals:
       - Ref: BastionEnabled
       - 'true'
+  HasBastionSshCidr2:
+    Fn::Not:
+    - Fn::Equals:
+      - Fn::Join:
+        - ','
+        - Ref: BastionSshCidrs
+      - Fn::Select:
+        - 0
+        - Ref: BastionSshCidrs
 Resources:
   GeneratedEc2KeyPair:
     Type: AWS::EC2::KeyPair
@@ -141,7 +150,7 @@ Resources:
     - Db
     - Iam
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/9ea73a9ca90b2c568c1b07d90272058d.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/2c309fa211c1e4ec709d71b57231d884.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix
@@ -152,10 +161,17 @@ Resources:
           - CreateNewEc2KeyPair
           - Ref: GeneratedEc2KeyPair
           - Ref: ExistingEc2KeyName
-        BastionSshCidrs:
-          Fn::Join:
-          - ','
+        BastionSshCidr1:
+          Fn::Select:
+          - 0
           - Ref: BastionSshCidrs
+        BastionSshCidr2:
+          Fn::If:
+          - HasBastionSshCidr2
+          - Fn::Select:
+            - 1
+            - Ref: BastionSshCidrs
+          - ''
         EksClusterName: spendsmart
         EksRegion:
           Ref: AWS::Region

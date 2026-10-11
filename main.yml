@@ -86,6 +86,11 @@ Conditions:
   CreateBastion: !And
     - !Condition CreateNewEksCluster
     - !Equals [!Ref BastionEnabled, 'true']
+  # More than one SSH CIDR when joined list differs from the first entry alone (no Fn::Length / Fn::Contains).
+  HasBastionSshCidr2: !Not
+    - !Equals
+      - !Join [',', !Ref BastionSshCidrs]
+      - !Select [0, !Ref BastionSshCidrs]
 
 Resources:
   GeneratedEc2KeyPair:
@@ -121,7 +126,8 @@ Resources:
         NamePrefix: !Ref NamePrefix
         BastionEnabled: !Ref BastionEnabled
         Ec2KeyName: !If [CreateNewEc2KeyPair, !Ref GeneratedEc2KeyPair, !Ref ExistingEc2KeyName]
-        BastionSshCidrs: !Join [',', !Ref BastionSshCidrs]
+        BastionSshCidr1: !Select [0, !Ref BastionSshCidrs]
+        BastionSshCidr2: !If [HasBastionSshCidr2, !Select [1, !Ref BastionSshCidrs], '']
         EksClusterName: spendsmart
         EksRegion: !Ref AWS::Region
         VpcId: !GetAtt Network.Outputs.VpcId

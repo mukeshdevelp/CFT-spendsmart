@@ -30,8 +30,13 @@ Parameters:
     Default: /dev/xvda
   Ec2KeyName:
     Type: AWS::EC2::KeyPair::KeyName
-  BastionSshCidrs:
-    Type: CommaDelimitedList
+  BastionSshCidr1:
+    Type: String
+    Description: Primary SSH allowlist CIDR for the bastion.
+  BastionSshCidr2:
+    Type: String
+    Default: ''
+    Description: Optional second SSH CIDR (empty = not used).
   TcpProtocol:
     Type: String
     Default: tcp
@@ -121,14 +126,7 @@ Conditions:
   RunClusterBootstrap: !And
     - !Condition CreateBastion
     - !Equals [!Ref RunClusterBootstrap, 'true']
-  HasBastionSshCidr2: !Not [!Equals [!Length [!Ref BastionSshCidrs], 1]]
-  HasBastionSshCidr3: !And
-    - !Not [!Equals [!Length [!Ref BastionSshCidrs], 1]]
-    - !Not [!Equals [!Length [!Ref BastionSshCidrs], 2]]
-  HasBastionSshCidr4: !And
-    - !Not [!Equals [!Length [!Ref BastionSshCidrs], 1]]
-    - !Not [!Equals [!Length [!Ref BastionSshCidrs], 2]]
-    - !Not [!Equals [!Length [!Ref BastionSshCidrs], 3]]
+  HasBastionSshCidr2: !Not [!Equals [!Ref BastionSshCidr2, '']]
 
 Resources:
   BastionInstanceProfile:
@@ -161,7 +159,7 @@ Resources:
         - IpProtocol: !Ref TcpProtocol
           FromPort: !Ref BastionSshPort
           ToPort: !Ref BastionSshPort
-          CidrIp: !Select [0, !Ref BastionSshCidrs]
+          CidrIp: !Ref BastionSshCidr1
           Description: SSH to bastion (CIDR 1)
       SecurityGroupEgress:
         - IpProtocol: !Ref AllTrafficProtocol
@@ -185,30 +183,8 @@ Resources:
       IpProtocol: !Ref TcpProtocol
       FromPort: !Ref BastionSshPort
       ToPort: !Ref BastionSshPort
-      CidrIp: !Select [1, !Ref BastionSshCidrs]
+      CidrIp: !Ref BastionSshCidr2
       Description: SSH to bastion (CIDR 2)
-
-  BastionSshIngressCidr3:
-    Type: AWS::EC2::SecurityGroupIngress
-    Condition: HasBastionSshCidr3
-    Properties:
-      GroupId: !Ref BastionSecurityGroup
-      IpProtocol: !Ref TcpProtocol
-      FromPort: !Ref BastionSshPort
-      ToPort: !Ref BastionSshPort
-      CidrIp: !Select [2, !Ref BastionSshCidrs]
-      Description: SSH to bastion (CIDR 3)
-
-  BastionSshIngressCidr4:
-    Type: AWS::EC2::SecurityGroupIngress
-    Condition: HasBastionSshCidr4
-    Properties:
-      GroupId: !Ref BastionSecurityGroup
-      IpProtocol: !Ref TcpProtocol
-      FromPort: !Ref BastionSshPort
-      ToPort: !Ref BastionSshPort
-      CidrIp: !Select [3, !Ref BastionSshCidrs]
-      Description: SSH to bastion (CIDR 4)
 
   BastionHttpsToEksApiIngress:
     Type: AWS::EC2::SecurityGroupIngress
