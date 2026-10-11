@@ -20,7 +20,7 @@ pipeline {
     )
     string(
       name: 'CFN_TEMPLATE_BUCKET',
-      defaultValue: '',
+      defaultValue: 'spendsmart-cfn-packages',
       description: 'S3 bucket for packaged nested templates and bastion-assets'
     )
     string(
