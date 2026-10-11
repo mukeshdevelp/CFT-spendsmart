@@ -63,7 +63,7 @@ pipeline {
         script {
           withAwsCredentials {
             sh '''
-            set -euo pipefail
+            set -eu
             command -v aws python3 >/dev/null
             test -f main.yml parameters.json
             test -n "${CFN_TEMPLATE_BUCKET}"
@@ -78,7 +78,7 @@ pipeline {
     stage('Prepare deploy parameters') {
       steps {
         sh '''
-          set -euo pipefail
+          set -eu
           python3 <<PY
           import json, os
           from pathlib import Path
@@ -115,7 +115,7 @@ pipeline {
         script {
           withAwsCredentials {
             sh '''
-            set -euo pipefail
+            set -eu
             aws cloudformation package \
               --template-file main.yml \
               --s3-bucket "${CFN_TEMPLATE_BUCKET}" \
@@ -135,7 +135,7 @@ pipeline {
         script {
           withAwsCredentials {
             sh '''
-            set -euo pipefail
+            set -eu
             if aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
               CHANGE_SET_TYPE=UPDATE
               aws cloudformation update-stack \
@@ -173,7 +173,7 @@ pipeline {
         script {
           withAwsCredentials {
             sh '''
-            set -euo pipefail
+            set -eu
             CHANGE_SET_TYPE=$(cat .cfn-change-type)
             if [ "$CHANGE_SET_TYPE" = "CREATE" ]; then
               aws cloudformation wait stack-create-complete --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}"
