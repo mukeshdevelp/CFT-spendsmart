@@ -228,7 +228,12 @@ Resources:
             command -v curl >/dev/null || dnf install -y curl-minimal
             mkdir -p /opt/spendsmart/manifests
             aws s3 sync "${BootstrapAssetsS3Uri}/" /opt/spendsmart/ --region ${AWS::Region}
-            chmod +x /opt/spendsmart/cluster-bootstrap.sh
+            chmod +x /opt/spendsmart/cluster-bootstrap.sh /opt/spendsmart/install-kubectl.sh /opt/spendsmart/configure-kubeconfig.sh
+            export KUBECTL_VERSION=${BastionKubectlVersion}
+            /opt/spendsmart/install-kubectl.sh
+            export EKS_REGION=${EksRegion}
+            export EKS_CLUSTER_NAME=${EksClusterName}
+            /opt/spendsmart/configure-kubeconfig.sh
             if [ "${RunBootstrapFlag}" = "true" ]; then
               cat >/etc/systemd/system/spendsmart-cluster-bootstrap.service <<UNIT
             [Unit]

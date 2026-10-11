@@ -1,6 +1,0 @@
----
-- name: Wait for EKS nodes via bastion
-  hosts: localhost
-  gather_facts: false
-  roles:
-    - role: eks_ready

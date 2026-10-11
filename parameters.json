@@ -10,9 +10,5 @@
   {
     "ParameterKey": "S3BucketName",
     "ParameterValue": "athena-results-spendsmart-dev"
-  },
-  {
-    "ParameterKey": "SpendSmartWorkloadMode",
-    "ParameterValue": "LeaveExisting"
   }
 ]

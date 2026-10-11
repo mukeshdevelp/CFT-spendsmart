@@ -1,6 +1,0 @@
----
-- name: Sync bastion bootstrap assets to S3
-  hosts: localhost
-  gather_facts: false
-  roles:
-    - role: bastion_assets

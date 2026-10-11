@@ -62,17 +62,6 @@ Parameters:
     AllowedValues: ['true', 'false']
     Default: 'false'
 
-  SpendSmartWorkloadMode:
-    Type: String
-    AllowedValues: [InstallNew, LeaveExisting]
-    Default: LeaveExisting
-    Description: LeaveExisting deploys infra only; use helm-main.yml or Jenkinsfile.helm for the chart.
-
-  SpendSmartValuesS3Uri:
-    Type: String
-    Default: ''
-    Description: Optional S3 URI to client-a-values.yaml. When empty, values are generated from stack outputs.
-
   CfnTemplateBucket:
     Type: String
     Default: spendsmart-cfn-packages
@@ -90,22 +79,10 @@ Rules:
         AssertDescription: ExistingEksPrivateSubnetId is required in UseExisting mode.
       - Assert: !Not [!Equals [!Ref ExistingEksClusterSecurityGroupId, '']]
         AssertDescription: ExistingEksClusterSecurityGroupId is required in UseExisting mode.
-  ExistingEksControllerRequired:
-    RuleCondition: !And
-      - !Equals [!Ref EksClusterMode, UseExisting]
-      - !Equals [!Ref SpendSmartWorkloadMode, InstallNew]
-    Assertions:
-      - Assert: !Equals [!Ref ExistingEksLoadBalancerControllerReady, 'true']
-        AssertDescription: Install AWS Load Balancer Controller before installing SpendSmart into an existing cluster.
-
 Conditions:
   CreateNewEc2KeyPair: !Equals [!Ref Ec2KeyPairMode, CreateNew]
   CreateNewEksCluster: !Equals [!Ref EksClusterMode, CreateNew]
   UseExistingEksCluster: !Equals [!Ref EksClusterMode, UseExisting]
-  InstallSpendSmart: !Equals [!Ref SpendSmartWorkloadMode, InstallNew]
-  InstallSpendSmartOnNewCluster: !And
-    - !Condition InstallSpendSmart
-    - !Condition CreateNewEksCluster
   CreateBastion: !And
     - !Condition CreateNewEksCluster
     - !Equals [!Ref BastionEnabled, 'true']
@@ -209,30 +186,6 @@ Resources:
         NodeGroup1Name: !GetAtt Eks.Outputs.EksNodeGroup1Name
         NodeGroup2Name: !GetAtt Eks.Outputs.EksNodeGroup2Name
 
-  SpendSmart:
-    Type: AWS::CloudFormation::Stack
-    Condition: InstallSpendSmartOnNewCluster
-    DependsOn:
-      - Alb
-      - Db
-      - Eks
-    Properties:
-      TemplateURL: ./modules/spendsmart/template.yaml
-      Parameters:
-        NamePrefix: !Ref NamePrefix
-        ClusterName: !If [UseExistingEksCluster, !Ref ExistingEksClusterName, !GetAtt Eks.Outputs.EksClusterName]
-        ClusterSecurityGroupId: !If [UseExistingEksCluster, !Ref ExistingEksClusterSecurityGroupId, !GetAtt Eks.Outputs.EksClusterSecurityGroupId]
-        VpcId: !If [UseExistingEksCluster, !Ref ExistingEksVpcId, !GetAtt Network.Outputs.VpcId]
-        PrivateSubnetId: !If [UseExistingEksCluster, !Ref ExistingEksPrivateSubnetId, !GetAtt Network.Outputs.PrivateSubnet1Id]
-        InstallAlbController: !If [CreateNewEksCluster, 'true', 'false']
-        ChartRepository: https://github.com/OT-CONTAINER-KIT/helm-charts.git
-        ChartBranch: feature/spendsmart-helm-chart
-        Namespace: spendsmart
-        AlbDnsName: !GetAtt Alb.Outputs.AlbDnsName
-        PostgresSecretName: !Sub '${NamePrefix}/postgres'
-        ClickHouseSecretName: !Sub '${NamePrefix}/clickhouse'
-        ValuesS3Uri: !Ref SpendSmartValuesS3Uri
-
   S3:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -327,17 +280,6 @@ Outputs:
   AlbControllerRoleArn:
     Condition: CreateNewEksCluster
     Value: !GetAtt Eks.Outputs.AlbControllerRoleArn
-  SpendSmartDeploymentHostId:
-    Condition: InstallSpendSmartOnNewCluster
-    Value: !GetAtt SpendSmart.Outputs.DeploymentHostId
-  SpendSmartNamespace:
-    Condition: InstallSpendSmartOnNewCluster
-    Value: !GetAtt SpendSmart.Outputs.Namespace
-  SpendSmartIngressName:
-    Condition: InstallSpendSmartOnNewCluster
-    Value: !GetAtt SpendSmart.Outputs.IngressName
-  
-  
   PostgresEndpoint:
     Condition: CreateNewEksCluster
     Value: !GetAtt Db.Outputs.PostgresEndpoint

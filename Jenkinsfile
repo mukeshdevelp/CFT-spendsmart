@@ -16,17 +16,17 @@ pipeline {
     string(
       name: 'CFN_STACK_NAME',
       defaultValue: 'spendsmart-dev',
-      description: 'CloudFormation root stack name'
+      description: 'CloudFormation root stack name (main.yml)'
     )
     string(
       name: 'CFN_TEMPLATE_BUCKET',
       defaultValue: '',
-      description: 'S3 bucket for packaged nested templates (must exist in AWS_REGION)'
+      description: 'S3 bucket for packaged nested templates and bastion-assets'
     )
     string(
       name: 'S3_BUCKET_NAME',
       defaultValue: 'athena-results-spendsmart-dev',
-      description: 'S3 bucket for data, CUR, and Athena results (created/deleted with stack)'
+      description: 'Data/CUR S3 bucket parameter'
     )
     string(
       name: 'EXISTING_EC2_KEY_NAME',
@@ -37,21 +37,6 @@ pipeline {
       name: 'BASTION_SSH_CIDRS',
       defaultValue: '0.0.0.0/0',
       description: 'Comma-separated bastion SSH CIDR allowlist'
-    )
-    choice(
-      name: 'SPENDSMART_WORKLOAD_MODE',
-      choices: ['LeaveExisting', 'InstallNew'],
-      description: 'LeaveExisting = infra only; use Jenkinsfile.helm for chart deploy'
-    )
-    string(
-      name: 'SPENDSMART_VALUES_S3_URI',
-      defaultValue: '',
-      description: 'Optional Helm values URI. Empty + UPLOAD_CLIENT_VALUES uses s3://<template-bucket>/client-a-values.yaml'
-    )
-    booleanParam(
-      name: 'UPLOAD_CLIENT_VALUES',
-      defaultValue: true,
-      description: 'Upload client-a-values.yaml from this repo to the template bucket'
     )
     booleanParam(
       name: 'WAIT_FOR_STACK',
@@ -70,7 +55,6 @@ pipeline {
     stage('Checkout') {
       steps {
         checkout scm
-        sh 'pwd && ls -la'
       }
     }
 
@@ -78,14 +62,9 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          command -v aws >/dev/null
-          aws --version
-          test -f main.yml
-          test -f parameters.json
-          if [ -z "${CFN_TEMPLATE_BUCKET}" ]; then
-            echo "CFN_TEMPLATE_BUCKET is required"
-            exit 1
-          fi
+          command -v aws python3 >/dev/null
+          test -f main.yml parameters.json
+          test -n "${CFN_TEMPLATE_BUCKET}"
           aws s3api head-bucket --bucket "${CFN_TEMPLATE_BUCKET}"
         '''
       }
@@ -95,22 +74,14 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          VALUES_URI="${SPENDSMART_VALUES_S3_URI}"
-          if [ -z "$VALUES_URI" ] && [ "${UPLOAD_CLIENT_VALUES}" = "true" ]; then
-            VALUES_URI="s3://${CFN_TEMPLATE_BUCKET}/client-a-values.yaml"
-          fi
-          export VALUES_URI
           python3 <<PY
-          import json
-          import os
+          import json, os
           from pathlib import Path
-
           overrides = {
               "ExistingEc2KeyName": os.environ["EXISTING_EC2_KEY_NAME"],
               "BastionSshCidrs": os.environ["BASTION_SSH_CIDRS"],
               "S3BucketName": os.environ["S3_BUCKET_NAME"],
-              "SpendSmartWorkloadMode": os.environ["SPENDSMART_WORKLOAD_MODE"],
-              "SpendSmartValuesS3Uri": os.environ.get("VALUES_URI", ""),
+              "CfnTemplateBucket": os.environ["CFN_TEMPLATE_BUCKET"],
           }
           base = json.loads(Path("parameters.json").read_text())
           by_key = {p["ParameterKey"]: p for p in base}
@@ -120,34 +91,17 @@ pipeline {
               json.dumps(list(by_key.values()), indent=2) + "\\n"
           )
           PY
-          cat "${DEPLOY_PARAMETERS}"
-        '''
-      }
-    }
-
-    stage('Upload Helm values') {
-      when {
-        expression { return params.UPLOAD_CLIENT_VALUES }
-      }
-      steps {
-        sh '''
-          set -euo pipefail
-          test -f client-a-values.yaml
-          aws s3 cp client-a-values.yaml "s3://${CFN_TEMPLATE_BUCKET}/client-a-values.yaml"
         '''
       }
     }
 
     stage('Upload bastion bootstrap assets') {
       steps {
-        sh '''
-          set -euo pipefail
-          bash scripts/sync-bastion-assets.sh "${CFN_TEMPLATE_BUCKET}" "${AWS_REGION}"
-        '''
+        sh 'bash scripts/sync-bastion-assets.sh "${CFN_TEMPLATE_BUCKET}" "${AWS_REGION}"'
       }
     }
 
-    stage('Package templates') {
+    stage('Package and validate') {
       steps {
         sh '''
           set -euo pipefail
@@ -156,14 +110,6 @@ pipeline {
             --s3-bucket "${CFN_TEMPLATE_BUCKET}" \
             --output-template-file "${PACKAGED_TEMPLATE}" \
             --region "${AWS_REGION}"
-        '''
-      }
-    }
-
-    stage('Validate packaged template') {
-      steps {
-        sh '''
-          set -euo pipefail
           aws cloudformation validate-template \
             --template-body file://"${PACKAGED_TEMPLATE}" \
             --region "${AWS_REGION}"
@@ -175,16 +121,19 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          if aws cloudformation describe-stacks \
-            --stack-name "${CFN_STACK_NAME}" \
-            --region "${AWS_REGION}" >/dev/null 2>&1; then
+          if aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
             CHANGE_SET_TYPE=UPDATE
             aws cloudformation update-stack \
               --stack-name "${CFN_STACK_NAME}" \
               --template-body file://"${PACKAGED_TEMPLATE}" \
               --parameters file://"${DEPLOY_PARAMETERS}" \
               --capabilities CAPABILITY_NAMED_IAM \
-              --region "${AWS_REGION}"
+              --region "${AWS_REGION}" || {
+                msg=$(aws cloudformation describe-stack-events --stack-name "${CFN_STACK_NAME}" \
+                  --region "${AWS_REGION}" --max-items 1 \
+                  --query 'StackEvents[0].ResourceStatusReason' --output text 2>/dev/null || true)
+                echo "$msg" | grep -q "No updates are to be performed"
+              }
           else
             CHANGE_SET_TYPE=CREATE
             aws cloudformation create-stack \
@@ -208,19 +157,12 @@ pipeline {
           set -euo pipefail
           CHANGE_SET_TYPE=$(cat .cfn-change-type)
           if [ "$CHANGE_SET_TYPE" = "CREATE" ]; then
-            aws cloudformation wait stack-create-complete \
-              --stack-name "${CFN_STACK_NAME}" \
-              --region "${AWS_REGION}"
+            aws cloudformation wait stack-create-complete --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}"
           else
-            aws cloudformation wait stack-update-complete \
-              --stack-name "${CFN_STACK_NAME}" \
-              --region "${AWS_REGION}"
+            aws cloudformation wait stack-update-complete --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" || true
           fi
-          aws cloudformation describe-stacks \
-            --stack-name "${CFN_STACK_NAME}" \
-            --region "${AWS_REGION}" \
-            --query 'Stacks[0].StackStatus' \
-            --output text
+          aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+            --query 'Stacks[0].StackStatus' --output text
         '''
       }
     }
@@ -228,12 +170,8 @@ pipeline {
     stage('Stack outputs') {
       steps {
         sh '''
-          set -euo pipefail
-          aws cloudformation describe-stacks \
-            --stack-name "${CFN_STACK_NAME}" \
-            --region "${AWS_REGION}" \
-            --query 'Stacks[0].Outputs' \
-            --output table
+          aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+            --query 'Stacks[0].Outputs' --output table
         '''
       }
     }
@@ -243,9 +181,7 @@ pipeline {
     failure {
       sh '''
         set +e
-        aws cloudformation describe-stack-events \
-          --stack-name "${CFN_STACK_NAME}" \
-          --region "${AWS_REGION}" \
+        aws cloudformation describe-stack-events --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
           --max-items 20 \
           --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[Timestamp,LogicalResourceId,ResourceStatusReason]' \
           --output table

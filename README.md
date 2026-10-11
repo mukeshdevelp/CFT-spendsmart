@@ -8,7 +8,7 @@ For deployment commands and troubleshooting, see [ONE_CLICK_DEPLOYMENT.md](ONE_C
 
 - VPC, two public subnets, two private subnets in distinct AZs, internet gateway, and one NAT gateway/EIP when enabled.
 - Bastion host (SSH/SSM). Cluster bootstrap (kubectl, node labels, in-cluster Postgres/ClickHouse) runs in the background via `spendsmart-cluster-bootstrap.service`; it does not block CloudFormation.
-- Bastion IAM lives in `modules/iam`. Bootstrap script and DB manifests live under `modules/bastion/scripts` and `modules/bastion/manifests` and are published to `s3://<CfnTemplateBucket>/bastion-assets/` before deploy (`scripts/sync-bastion-assets.sh`).
+- Bastion IAM lives in `modules/iam`. UserData installs **kubectl** and **kubeconfig** for `ec2-user` from `install-kubectl.sh` / `configure-kubeconfig.sh` in `bastion-assets/`. Cluster bootstrap (labels, DB StatefulSets) runs via `spendsmart-cluster-bootstrap.service`. Publish assets with `scripts/sync-bastion-assets.sh` before deploy.
 - Private EKS cluster and two managed node groups. Node group 2 is the data node (`c7i-flex.xlarge`, 100 GB) and runs PostgreSQL and ClickHouse as in-cluster StatefulSets.
 - PostgreSQL service `postgres.databases.svc.cluster.local:5432` and ClickHouse service `clickhouse.databases.svc.cluster.local` on ports 8123 and 9000.
 
@@ -28,31 +28,14 @@ aws secretsmanager get-secret-value --secret-id spendsmart-dev/clickhouse --regi
 
 The AWS Load Balancer Controller creates the application ALB and target group from a Kubernetes Ingress. There is intentionally no independent CloudFormation ALB target group: EKS managed node groups do not attach their changing Auto Scaling groups to an unrelated target group automatically.
 
-## Optional Application Deployment
+## Application deployment (after infra)
 
-`SpendSmartWorkloadMode` defaults to `LeaveExisting` so `main.yml` deploys infrastructure only (no circular dependency with bastion bootstrap). Install the Helm chart with a **second** pipeline or stack:
+`main.yml` stops at infrastructure: EKS nodes and in-cluster Postgres/ClickHouse (`databases` namespace) via bastion bootstrap. It does **not** install the SpendSmart Helm chart.
 
-1. **Jenkins:** run the job defined in `Jenkinsfile.helm` for the full flow (infra via `main.yml`, runtime K8s secrets, then `helm-main.yml`) using playbooks under `ansible/`. See `ansible/README.md`.
-2. **CLI:** package `helm-main.yml`, pass `ClusterName`, `VpcId`, `AlbDnsName`, and other parameters from `aws cloudformation describe-stacks` on the infra stack.
+1. **Jenkins `Jenkinsfile`** — package and deploy `main.yml` (sync bastion assets first).
+2. **Jenkins `Jenkinsfile.helm`** — wait for nodes/DB pods, apply runtime secrets (Harbor, etc.), deploy `helm-main.yml` (`modules/spendsmart`).
 
-To install the chart inside the same root stack instead, set `SpendSmartWorkloadMode=InstallNew` on create or update.
-
-The chart consumes external credentials and service configuration. Before Helm runs, create these chart-required Secrets (or let the spendsmart module create DB-related ones) using an approved secret-management process:
-
-- `harbor-ldc-coe-regcred`
-- `encryption-key`
-- `clickhouse`
-- `clickhouse-db`
-- `aws-access`
-- `base-url`
-- `gemini-key`
-- `postgres-config`
-
-Then package `main.yml` again and update the stack with `DeploySpendSmart=true`. The `modules/spendsmart/template.yaml` nested stack launches a private deployment host, installs the AWS Load Balancer Controller and the chart from branch `feature/spendsmart-helm-chart`, and applies the frontend Ingress. Its EKS access entry grants cluster-admin permissions while the host installs controller cluster-scoped resources. The private host has no inbound rules and uses Systems Manager Session Manager for administration; it remains until the module is removed and incurs EC2 charges while enabled.
-
-The Ingress uses `target-type: instance` and forces `frontend.service.type=NodePort`. The controller owns the ALB and keeps eligible worker EC2 instances registered as nodes change. The ALB DNS name appears in `kubectl get ingress spendsmart -n spendsmart`, not in CloudFormation outputs.
-
-Optional environment-specific, non-secret chart overrides can be downloaded from S3 by setting both `SpendSmartValuesS3Uri` and `SpendSmartValuesS3ObjectArn` to the object's URI and exact ARN. The deployment role receives `s3:GetObject` only for that ARN. Do not store credentials in the values file.
+Harbor and optional app secrets are Jenkins job parameters; the spendsmart module still creates DB-related secrets in the `spendsmart` namespace from Secrets Manager.
 
 ## Deploy Infrastructure
 

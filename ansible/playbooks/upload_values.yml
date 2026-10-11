@@ -1,6 +1,0 @@
----
-- name: Upload Helm values file
-  hosts: localhost
-  gather_facts: false
-  roles:
-    - role: upload_client_values

@@ -1,8 +1,0 @@
----
-- name: SpendSmart pipeline preflight
-  hosts: localhost
-  gather_facts: false
-  vars:
-    skip_infra_check: "{{ lookup('env', 'SKIP_INFRA_DEPLOY') | default('false', true) | bool }}"
-  roles:
-    - role: preflight

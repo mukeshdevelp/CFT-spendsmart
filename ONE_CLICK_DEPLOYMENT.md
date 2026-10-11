@@ -16,7 +16,7 @@ This guide deploys the modular CloudFormation root stack in `main.yml`. Its nest
 | AWS Load Balancer Controller | Helm / Kubernetes | Watches Ingress resources and provisions AWS load-balancing resources |
 | Application ALB and target group | Load Balancer Controller | Routes requests and registers worker nodes for the SpendSmart Ingress |
 
-Default `SpendSmartWorkloadMode` is `LeaveExisting` (infra only). After the stack is healthy, deploy the chart with `helm-main.yml` / `Jenkinsfile.helm`, or set `SpendSmartWorkloadMode=InstallNew` on the root stack. Create required namespace Secrets before Helm runs.
+`main.yml` is infra only (EKS, bastion bootstrap, in-cluster databases). Deploy the application with `helm-main.yml` via **Jenkinsfile.helm** after nodes and `databases` pods are ready.
 
 ## Pre-requisites
 

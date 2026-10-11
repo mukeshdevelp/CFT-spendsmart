@@ -19,29 +19,11 @@ KUBECTL_VERSION="${KUBECTL_VERSION:-1.36.2}"
 MANIFESTS_DIR="${MANIFESTS_DIR:-/opt/spendsmart/manifests}"
 
 dnf install -y aws-cfn-bootstrap python3
-command -v curl >/dev/null || dnf install -y curl-minimal
-
-if ! command -v kubectl >/dev/null; then
-  curl -fL -o /usr/local/bin/kubectl \
-    "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
-  chmod +x /usr/local/bin/kubectl
-fi
-
-mkdir -p /home/ec2-user/.kube /root/.kube
-aws eks update-kubeconfig \
-  --region "$EKS_REGION" \
-  --name "$EKS_CLUSTER_NAME" \
-  --kubeconfig /home/ec2-user/.kube/config
-chown -R ec2-user:ec2-user /home/ec2-user/.kube
-chmod 600 /home/ec2-user/.kube/config
-cp /home/ec2-user/.kube/config /root/.kube/config
-chmod 600 /root/.kube/config
-
-grep -q KUBECONFIG /home/ec2-user/.bashrc 2>/dev/null || \
-  echo 'export KUBECONFIG=$HOME/.kube/config' >> /home/ec2-user/.bashrc
-grep -q 'alias k=kubectl' /home/ec2-user/.bashrc 2>/dev/null || \
-  echo 'alias k=kubectl' >> /home/ec2-user/.bashrc
-
+SCRIPT_DIR="${SCRIPT_DIR:-/opt/spendsmart}"
+export KUBECTL_VERSION
+bash "${SCRIPT_DIR}/install-kubectl.sh"
+export EKS_REGION EKS_CLUSTER_NAME
+bash "${SCRIPT_DIR}/configure-kubeconfig.sh"
 export KUBECONFIG=/root/.kube/config
 
 until kubectl get nodes >/dev/null 2>&1; do

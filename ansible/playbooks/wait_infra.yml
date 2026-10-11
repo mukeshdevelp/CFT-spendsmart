@@ -1,9 +1,0 @@
----
-- name: Wait for infrastructure stack
-  hosts: localhost
-  gather_facts: false
-  roles:
-    - role: cfn_wait
-      vars:
-        target_stack_name: "{{ cfn_stack_name }}"
-        change_type_file: "{{ infra_change_type_file }}"

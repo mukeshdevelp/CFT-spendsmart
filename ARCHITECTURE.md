@@ -98,9 +98,8 @@ CloudFormation outputs are strings. Values representing Terraform maps/lists are
 | `AlbControllerNamespace` | Controller namespace configured for the association |
 | `AlbControllerServiceAccountName` | Controller service-account name configured for the association |
 | `AlbControllerVersion` | Controller release to align with the IAM policy and Helm chart |
-| `SpendSmartDeploymentHostId` | Private deployment host instance ID, when `DeploySpendSmart` is true |
-| `SpendSmartNamespace` | Application namespace, when deployment is enabled |
-| `SpendSmartIngressName` | Application Ingress name, when deployment is enabled |
+| `AlbDnsName` | Infra ALB DNS (used as Helm parameter for `helm-main.yml`) |
+| `BastionInstanceId` | Bastion for SSM/kubectl during Jenkins Helm pipeline |
 | `BucketName` | S3 bucket name |
 | `DataLocation` | S3 URI for the data prefix |
 | `AthenaOutputLocation` | S3 URI for Athena query results |
@@ -112,11 +111,10 @@ CloudFormation outputs are strings. Values representing Terraform maps/lists are
 | `AnalyticsIamPolicyName` | Analytics IAM managed policy name |
 | `AnalyticsIamPolicyArn` | Analytics IAM managed policy ARN |
 
-The three `SpendSmart*` outputs are conditional on `DeploySpendSmart=true`. Retrieve the provisioned ALB address from `kubectl get ingress spendsmart -n spendsmart`.
+Application Helm deploy uses **`helm-main.yml`** (separate stack or **Jenkinsfile.helm**), not the root stack. After deploy, the app Ingress ALB DNS is from `kubectl get ingress spendsmart -n spendsmart`.
 
 ## Resource Lifecycle
 
-1. Deploy the infrastructure with `DeploySpendSmart=false`.
-2. Configure kubectl from `EksConfigureKubectl`; create the `spendsmart` namespace and required Secrets.
-3. Update the stack with `DeploySpendSmart=true`. The module installs the controller and chart, then applies the Ingress.
-4. Verify `kubectl get ingress spendsmart -n spendsmart` and target health. Deleting the stack removes the application module and EKS resources and deletes the S3 bucket if it is empty. Empty object versions first or bucket deletion can fail.
+1. Deploy **`main.yml`** via **Jenkinsfile** (bastion assets synced to S3 first). Wait for bastion bootstrap: nodes Ready and `databases` pods Running.
+2. Run **Jenkinsfile.helm** (runtime secrets + `helm-main.yml`).
+3. Verify ingress and target health. Stack delete removes infra; delete the Helm stack separately if needed.
