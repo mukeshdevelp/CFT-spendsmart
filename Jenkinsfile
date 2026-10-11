@@ -76,30 +76,41 @@ pipeline {
       }
     }
 
-    stage('Prepare deploy parameters') {
-      steps {
+    
+stage('Prepare deploy parameters') {
+    steps {
         sh '''
-          set -eu
-          python3 <<PY
-          import json, os
-          from pathlib import Path
-          overrides = {
-              "ExistingEc2KeyName": os.environ["EXISTING_EC2_KEY_NAME"],
-              "BastionSshCidrs": os.environ["BASTION_SSH_CIDRS"],
-              "S3BucketName": os.environ["S3_BUCKET_NAME"],
-              "CfnTemplateBucket": os.environ["CFN_TEMPLATE_BUCKET"],
-          }
-          base = json.loads(Path("parameters.json").read_text())
-          by_key = {p["ParameterKey"]: p for p in base}
-          for key, value in overrides.items():
-              by_key[key] = {"ParameterKey": key, "ParameterValue": value}
-          Path(os.environ["DEPLOY_PARAMETERS"]).write_text(
-              json.dumps(list(by_key.values()), indent=2) + "\\n"
-          )
-          PY
-        '''
-      }
+            set -eu
+
+            python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+overrides = {
+    "ExistingEc2KeyName": os.environ["EXISTING_EC2_KEY_NAME"],
+    "BastionSshCidrs": os.environ["BASTION_SSH_CIDRS"],
+    "S3BucketName": os.environ["S3_BUCKET_NAME"],
+    "CfnTemplateBucket": os.environ["CFN_TEMPLATE_BUCKET"],
+}
+
+base = json.loads(Path("parameters.json").read_text())
+by_key = {p["ParameterKey"]: p for p in base}
+
+for key, value in overrides.items():
+    by_key[key] = {
+        "ParameterKey": key,
+        "ParameterValue": value,
     }
+
+Path(os.environ["DEPLOY_PARAMETERS"]).write_text(
+    json.dumps(list(by_key.values()), indent=2) + "\\n"
+)
+PY
+        '''
+    }
+}
+
 
     stage('Upload bastion bootstrap assets') {
       steps {
