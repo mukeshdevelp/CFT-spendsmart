@@ -84,14 +84,14 @@ pipeline {
       description: 'Optional base-url secret'
     )
     string(
-      name: 'AWS_ACCESS_KEY_ID',
+      name: 'APP_AWS_ACCESS_KEY_ID',
       defaultValue: '',
-      description: 'Optional aws-access secret'
+      description: 'Optional aws-access K8s secret (not Jenkins AWS creds)'
     )
     password(
-      name: 'AWS_SECRET_ACCESS_KEY',
+      name: 'APP_AWS_SECRET_ACCESS_KEY',
       defaultValue: '',
-      description: 'Optional aws-access secret'
+      description: 'Optional aws-access K8s secret'
     )
   }
 
@@ -116,61 +116,74 @@ pipeline {
 
     stage('Preflight') {
       steps {
-        sh '''
-          set -euo pipefail
-          command -v aws python3 >/dev/null
-          test -f helm-main.yml
-          test -n "${CFN_TEMPLATE_BUCKET}"
-          aws s3api head-bucket --bucket "${CFN_TEMPLATE_BUCKET}"
-          STATUS=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
-            --query 'Stacks[0].StackStatus' --output text)
-          echo "Infra stack status: ${STATUS}"
-          case "$STATUS" in
-            CREATE_COMPLETE|UPDATE_COMPLETE) ;;
-            *) echo "Infra stack not ready"; exit 1 ;;
-          esac
-        '''
+        script {
+          withAwsCredentials {
+            sh '''
+            set -euo pipefail
+            command -v aws python3 >/dev/null
+            test -f helm-main.yml
+            test -n "${CFN_TEMPLATE_BUCKET}"
+            aws sts get-caller-identity
+            aws s3api head-bucket --bucket "${CFN_TEMPLATE_BUCKET}"
+            STATUS=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+              --query 'Stacks[0].StackStatus' --output text)
+            echo "Infra stack status: ${STATUS}"
+            case "$STATUS" in
+              CREATE_COMPLETE|UPDATE_COMPLETE) ;;
+              *) echo "Infra stack not ready"; exit 1 ;;
+            esac
+          '''
+          }
+        }
       }
     }
 
     stage('Sync bastion helper scripts') {
       steps {
-        sh 'bash scripts/sync-bastion-assets.sh "${CFN_TEMPLATE_BUCKET}" "${AWS_REGION}"'
+        script {
+          withAwsCredentials {
+            sh 'bash scripts/sync-bastion-assets.sh "${CFN_TEMPLATE_BUCKET}" "${AWS_REGION}"'
+          }
+        }
       }
     }
 
     stage('Wait for nodes and database pods') {
       steps {
-        sh '''
-          set -euo pipefail
-          BASTION_ID=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
-            --query "Stacks[0].Outputs[?OutputKey=='BastionInstanceId'].OutputValue" --output text)
-          test -n "$BASTION_ID"
-          for attempt in $(seq 1 60); do
-            CMD_ID=$(aws ssm send-command --instance-ids "$BASTION_ID" --document-name AWS-RunShellScript \
-              --parameters 'commands=[
-                "export KUBECONFIG=/home/ec2-user/.kube/config",
-                "echo NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)",
-                "echo DB_PODS=$(kubectl get pods -n databases --no-headers 2>/dev/null | grep -c Running || true)",
-                "kubectl get nodes 2>/dev/null || true",
-                "kubectl get pods -n databases 2>/dev/null || true"
-              ]' --region "${AWS_REGION}" --query Command.CommandId --output text)
-            sleep 10
-            OUT=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$BASTION_ID" \
-              --region "${AWS_REGION}" --query StandardOutputContent --output text 2>/dev/null || true)
-            echo "$OUT"
-            NODES=$(echo "$OUT" | sed -n 's/^NODES=//p' | head -1 | tr -d '[:space:]')
-            DB_PODS=$(echo "$OUT" | sed -n 's/^DB_PODS=//p' | head -1 | tr -d '[:space:]')
-            if [ "${NODES:-0}" -ge 4 ] && [ "${DB_PODS:-0}" -ge 2 ]; then
-              echo "Cluster ready: ${NODES} nodes, ${DB_PODS} database pods Running"
-              exit 0
-            fi
-            echo "Attempt ${attempt}/60: nodes=${NODES:-0} db_pods=${DB_PODS:-0}"
-            sleep 20
-          done
-          echo "Timed out waiting for nodes/database pods; check /var/log/spendsmart-cluster-bootstrap.log on bastion"
-          exit 1
-        '''
+        script {
+          withAwsCredentials {
+            sh '''
+            set -euo pipefail
+            BASTION_ID=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+              --query "Stacks[0].Outputs[?OutputKey=='BastionInstanceId'].OutputValue" --output text)
+            test -n "$BASTION_ID"
+            for attempt in $(seq 1 60); do
+              CMD_ID=$(aws ssm send-command --instance-ids "$BASTION_ID" --document-name AWS-RunShellScript \
+                --parameters 'commands=[
+                  "export KUBECONFIG=/home/ec2-user/.kube/config",
+                  "echo NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)",
+                  "echo DB_PODS=$(kubectl get pods -n databases --no-headers 2>/dev/null | grep -c Running || true)",
+                  "kubectl get nodes 2>/dev/null || true",
+                  "kubectl get pods -n databases 2>/dev/null || true"
+                ]' --region "${AWS_REGION}" --query Command.CommandId --output text)
+              sleep 10
+              OUT=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$BASTION_ID" \
+                --region "${AWS_REGION}" --query StandardOutputContent --output text 2>/dev/null || true)
+              echo "$OUT"
+              NODES=$(echo "$OUT" | sed -n 's/^NODES=//p' | head -1 | tr -d '[:space:]')
+              DB_PODS=$(echo "$OUT" | sed -n 's/^DB_PODS=//p' | head -1 | tr -d '[:space:]')
+              if [ "${NODES:-0}" -ge 4 ] && [ "${DB_PODS:-0}" -ge 2 ]; then
+                echo "Cluster ready: ${NODES} nodes, ${DB_PODS} database pods Running"
+                exit 0
+              fi
+              echo "Attempt ${attempt}/60: nodes=${NODES:-0} db_pods=${DB_PODS:-0}"
+              sleep 20
+            done
+            echo "Timed out waiting for nodes/database pods; check /var/log/spendsmart-cluster-bootstrap.log on bastion"
+            exit 1
+          '''
+          }
+        }
       }
     }
 
@@ -179,7 +192,11 @@ pipeline {
         expression { return params.UPLOAD_CLIENT_VALUES }
       }
       steps {
-        sh 'aws s3 cp client-a-values.yaml "s3://${CFN_TEMPLATE_BUCKET}/client-a-values.yaml"'
+        script {
+          withAwsCredentials {
+            sh 'aws s3 cp client-a-values.yaml "s3://${CFN_TEMPLATE_BUCKET}/client-a-values.yaml"'
+          }
+        }
       }
     }
 
@@ -193,44 +210,48 @@ pipeline {
             encryption_key: params.ENCRYPTION_KEY,
             gemini_api_key: params.GEMINI_API_KEY,
             base_url: params.BASE_URL,
-            aws_access_key_id: params.AWS_ACCESS_KEY_ID,
-            aws_secret_access_key: params.AWS_SECRET_ACCESS_KEY,
+            aws_access_key_id: params.APP_AWS_ACCESS_KEY_ID,
+            aws_secret_access_key: params.APP_AWS_SECRET_ACCESS_KEY,
           ]
         }
-        sh '''
-          set -euo pipefail
-          BASTION_ID=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
-            --query "Stacks[0].Outputs[?OutputKey=='BastionInstanceId'].OutputValue" --output text)
-          KEY="bastion-assets/jenkins-secrets-${BUILD_NUMBER}.json"
-          aws s3 cp "${RUNTIME_SECRETS_JSON}" "s3://${CFN_TEMPLATE_BUCKET}/${KEY}" --sse AES256
-          CMD_ID=$(aws ssm send-command --instance-ids "$BASTION_ID" --document-name AWS-RunShellScript \
-            --parameters "commands=[
-              \"set -euo pipefail\",
-              \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/${KEY} /tmp/jenkins-secrets.json\",
-              \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/bastion-assets/bastion-apply-app-secrets.sh /tmp/bastion-apply-app-secrets.sh\",
-              \"chmod +x /tmp/bastion-apply-app-secrets.sh\",
-              \"sudo -u ec2-user KUBECONFIG=/home/ec2-user/.kube/config /tmp/bastion-apply-app-secrets.sh /tmp/jenkins-secrets.json\",
-              \"rm -f /tmp/jenkins-secrets.json /tmp/bastion-apply-app-secrets.sh\"
-            ]" --region "${AWS_REGION}" --query Command.CommandId --output text)
-          for i in $(seq 1 40); do
-            STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$BASTION_ID" \
-              --region "${AWS_REGION}" --query Status --output text)
-            if [ "$STATUS" = "Success" ]; then
-              aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$BASTION_ID" \
-                --region "${AWS_REGION}" --query StandardOutputContent --output text
-              aws s3 rm "s3://${CFN_TEMPLATE_BUCKET}/${KEY}"
-              exit 0
-            fi
-            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ]; then
-              aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$BASTION_ID" \
-                --region "${AWS_REGION}" --query '[StandardOutputContent,StandardErrorContent]' --output text
-              aws s3 rm "s3://${CFN_TEMPLATE_BUCKET}/${KEY}" || true
-              exit 1
-            fi
-            sleep 5
-          done
-          exit 1
-        '''
+        script {
+          withAwsCredentials {
+            sh '''
+            set -euo pipefail
+            BASTION_ID=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+              --query "Stacks[0].Outputs[?OutputKey=='BastionInstanceId'].OutputValue" --output text)
+            KEY="bastion-assets/jenkins-secrets-${BUILD_NUMBER}.json"
+            aws s3 cp "${RUNTIME_SECRETS_JSON}" "s3://${CFN_TEMPLATE_BUCKET}/${KEY}" --sse AES256
+            CMD_ID=$(aws ssm send-command --instance-ids "$BASTION_ID" --document-name AWS-RunShellScript \
+              --parameters "commands=[
+                \"set -euo pipefail\",
+                \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/${KEY} /tmp/jenkins-secrets.json\",
+                \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/bastion-assets/bastion-apply-app-secrets.sh /tmp/bastion-apply-app-secrets.sh\",
+                \"chmod +x /tmp/bastion-apply-app-secrets.sh\",
+                \"sudo -u ec2-user KUBECONFIG=/home/ec2-user/.kube/config /tmp/bastion-apply-app-secrets.sh /tmp/jenkins-secrets.json\",
+                \"rm -f /tmp/jenkins-secrets.json /tmp/bastion-apply-app-secrets.sh\"
+              ]" --region "${AWS_REGION}" --query Command.CommandId --output text)
+            for i in $(seq 1 40); do
+              STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$BASTION_ID" \
+                --region "${AWS_REGION}" --query Status --output text)
+              if [ "$STATUS" = "Success" ]; then
+                aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$BASTION_ID" \
+                  --region "${AWS_REGION}" --query StandardOutputContent --output text
+                aws s3 rm "s3://${CFN_TEMPLATE_BUCKET}/${KEY}"
+                exit 0
+              fi
+              if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ]; then
+                aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$BASTION_ID" \
+                  --region "${AWS_REGION}" --query '[StandardOutputContent,StandardErrorContent]' --output text
+                aws s3 rm "s3://${CFN_TEMPLATE_BUCKET}/${KEY}" || true
+                exit 1
+              fi
+              sleep 5
+            done
+            exit 1
+          '''
+          }
+        }
       }
       post {
         always {
@@ -248,71 +269,79 @@ pipeline {
           }
           env.RESOLVED_VALUES_URI = valuesUri ?: ''
         }
-        sh '''
-          set -euo pipefail
-          export VALUES_URI="${RESOLVED_VALUES_URI}"
-          python3 <<PY
-          import json, os, subprocess
-          from pathlib import Path
-          region = os.environ["AWS_REGION"]
-          stack = os.environ["CFN_STACK_NAME"]
-          out = subprocess.check_output(
-              ["aws", "cloudformation", "describe-stacks", "--stack-name", stack,
-               "--region", region, "--query", "Stacks[0].Outputs", "--output", "json"],
-              text=True,
-          )
-          outputs = {o["OutputKey"]: o["OutputValue"] for o in json.loads(out)}
-          def req(k):
-              v = outputs.get(k)
-              if not v:
-                  raise SystemExit(f"Missing output: {k}")
-              return v
-          params = [
-              {"ParameterKey": "NamePrefix", "ParameterValue": os.environ["NAME_PREFIX"]},
-              {"ParameterKey": "ClusterName", "ParameterValue": req("EksClusterName")},
-              {"ParameterKey": "ClusterSecurityGroupId", "ParameterValue": req("EksClusterSecurityGroupId")},
-              {"ParameterKey": "VpcId", "ParameterValue": req("VpcId")},
-              {"ParameterKey": "PrivateSubnetId", "ParameterValue": req("PrivateSubnet1Id")},
-              {"ParameterKey": "AlbDnsName", "ParameterValue": req("AlbDnsName")},
-              {"ParameterKey": "PostgresSecretName", "ParameterValue": f"{os.environ['NAME_PREFIX']}/postgres"},
-              {"ParameterKey": "ClickHouseSecretName", "ParameterValue": f"{os.environ['NAME_PREFIX']}/clickhouse"},
-              {"ParameterKey": "SpendSmartValuesS3Uri", "ParameterValue": os.environ.get("VALUES_URI", "")},
-              {"ParameterKey": "InstallAlbController", "ParameterValue": os.environ["INSTALL_ALB_CONTROLLER"]},
-          ]
-          Path(os.environ["HELM_PARAMETERS"]).write_text(json.dumps(params, indent=2) + "\\n")
-          PY
-        '''
+        script {
+          withAwsCredentials {
+            sh '''
+            set -euo pipefail
+            export VALUES_URI="${RESOLVED_VALUES_URI}"
+            python3 <<PY
+            import json, os, subprocess
+            from pathlib import Path
+            region = os.environ["AWS_REGION"]
+            stack = os.environ["CFN_STACK_NAME"]
+            out = subprocess.check_output(
+                ["aws", "cloudformation", "describe-stacks", "--stack-name", stack,
+                 "--region", region, "--query", "Stacks[0].Outputs", "--output", "json"],
+                text=True,
+            )
+            outputs = {o["OutputKey"]: o["OutputValue"] for o in json.loads(out)}
+            def req(k):
+                v = outputs.get(k)
+                if not v:
+                    raise SystemExit(f"Missing output: {k}")
+                return v
+            params = [
+                {"ParameterKey": "NamePrefix", "ParameterValue": os.environ["NAME_PREFIX"]},
+                {"ParameterKey": "ClusterName", "ParameterValue": req("EksClusterName")},
+                {"ParameterKey": "ClusterSecurityGroupId", "ParameterValue": req("EksClusterSecurityGroupId")},
+                {"ParameterKey": "VpcId", "ParameterValue": req("VpcId")},
+                {"ParameterKey": "PrivateSubnetId", "ParameterValue": req("PrivateSubnet1Id")},
+                {"ParameterKey": "AlbDnsName", "ParameterValue": req("AlbDnsName")},
+                {"ParameterKey": "PostgresSecretName", "ParameterValue": f"{os.environ['NAME_PREFIX']}/postgres"},
+                {"ParameterKey": "ClickHouseSecretName", "ParameterValue": f"{os.environ['NAME_PREFIX']}/clickhouse"},
+                {"ParameterKey": "SpendSmartValuesS3Uri", "ParameterValue": os.environ.get("VALUES_URI", "")},
+                {"ParameterKey": "InstallAlbController", "ParameterValue": os.environ["INSTALL_ALB_CONTROLLER"]},
+            ]
+            Path(os.environ["HELM_PARAMETERS"]).write_text(json.dumps(params, indent=2) + "\\n")
+            PY
+          '''
+          }
+        }
       }
     }
 
     stage('Deploy Helm stack') {
       steps {
-        sh '''
-          set -euo pipefail
-          aws cloudformation package \
-            --template-file helm-main.yml \
-            --s3-bucket "${CFN_TEMPLATE_BUCKET}" \
-            --output-template-file "${PACKAGED_HELM}" \
-            --region "${AWS_REGION}"
-          aws cloudformation validate-template \
-            --template-body file://"${PACKAGED_HELM}" \
-            --region "${AWS_REGION}"
-          if aws cloudformation describe-stacks --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
-            aws cloudformation update-stack \
-              --stack-name "${HELM_STACK_NAME}" \
-              --template-body file://"${PACKAGED_HELM}" \
-              --parameters file://"${HELM_PARAMETERS}" \
-              --capabilities CAPABILITY_NAMED_IAM \
+        script {
+          withAwsCredentials {
+            sh '''
+            set -euo pipefail
+            aws cloudformation package \
+              --template-file helm-main.yml \
+              --s3-bucket "${CFN_TEMPLATE_BUCKET}" \
+              --output-template-file "${PACKAGED_HELM}" \
               --region "${AWS_REGION}"
-          else
-            aws cloudformation create-stack \
-              --stack-name "${HELM_STACK_NAME}" \
+            aws cloudformation validate-template \
               --template-body file://"${PACKAGED_HELM}" \
-              --parameters file://"${HELM_PARAMETERS}" \
-              --capabilities CAPABILITY_NAMED_IAM \
               --region "${AWS_REGION}"
-          fi
-        '''
+            if aws cloudformation describe-stacks --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+              aws cloudformation update-stack \
+                --stack-name "${HELM_STACK_NAME}" \
+                --template-body file://"${PACKAGED_HELM}" \
+                --parameters file://"${HELM_PARAMETERS}" \
+                --capabilities CAPABILITY_NAMED_IAM \
+                --region "${AWS_REGION}"
+            else
+              aws cloudformation create-stack \
+                --stack-name "${HELM_STACK_NAME}" \
+                --template-body file://"${PACKAGED_HELM}" \
+                --parameters file://"${HELM_PARAMETERS}" \
+                --capabilities CAPABILITY_NAMED_IAM \
+                --region "${AWS_REGION}"
+            fi
+          '''
+          }
+        }
       }
     }
 
@@ -321,29 +350,50 @@ pipeline {
         expression { return params.WAIT_FOR_HELM_STACK }
       }
       steps {
-        sh '''
-          set -euo pipefail
-          if aws cloudformation describe-stacks --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" \
-            --query 'Stacks[0].StackStatus' --output text | grep -q IN_PROGRESS; then
-            aws cloudformation wait stack-create-complete --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" 2>/dev/null \
-              || aws cloudformation wait stack-update-complete --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}"
-          fi
-          aws cloudformation describe-stacks --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" \
-            --query 'Stacks[0].Outputs' --output table
-        '''
+        script {
+          withAwsCredentials {
+            sh '''
+            set -euo pipefail
+            if aws cloudformation describe-stacks --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" \
+              --query 'Stacks[0].StackStatus' --output text | grep -q IN_PROGRESS; then
+              aws cloudformation wait stack-create-complete --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" 2>/dev/null \
+                || aws cloudformation wait stack-update-complete --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}"
+            fi
+            aws cloudformation describe-stacks --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" \
+              --query 'Stacks[0].Outputs' --output table
+          '''
+          }
+        }
       }
     }
   }
 
   post {
     failure {
-      sh '''
-        set +e
-        aws cloudformation describe-stack-events --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" \
-          --max-items 15 \
-          --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[LogicalResourceId,ResourceStatusReason]' \
-          --output table
-      '''
+      steps {
+        script {
+          withAwsCredentials {
+            sh '''
+              set +e
+              aws cloudformation describe-stack-events --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" \
+                --max-items 15 \
+                --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[LogicalResourceId,ResourceStatusReason]' \
+                --output table
+            '''
+          }
+        }
+      }
     }
+  }
+}
+
+void withAwsCredentials(Closure body) {
+  withCredentials([[
+    $class: 'AmazonWebServicesCredentialsBinding',
+    credentialsId: 'aws-creds',
+    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY',
+  ]]) {
+    body()
   }
 }

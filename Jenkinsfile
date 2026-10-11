@@ -60,13 +60,18 @@ pipeline {
 
     stage('Preflight') {
       steps {
-        sh '''
-          set -euo pipefail
-          command -v aws python3 >/dev/null
-          test -f main.yml parameters.json
-          test -n "${CFN_TEMPLATE_BUCKET}"
-          aws s3api head-bucket --bucket "${CFN_TEMPLATE_BUCKET}"
-        '''
+        script {
+          withAwsCredentials {
+            sh '''
+            set -euo pipefail
+            command -v aws python3 >/dev/null
+            test -f main.yml parameters.json
+            test -n "${CFN_TEMPLATE_BUCKET}"
+            aws sts get-caller-identity
+            aws s3api head-bucket --bucket "${CFN_TEMPLATE_BUCKET}"
+          '''
+          }
+        }
       }
     }
 
@@ -97,54 +102,66 @@ pipeline {
 
     stage('Upload bastion bootstrap assets') {
       steps {
-        sh 'bash scripts/sync-bastion-assets.sh "${CFN_TEMPLATE_BUCKET}" "${AWS_REGION}"'
+        script {
+          withAwsCredentials {
+            sh 'bash scripts/sync-bastion-assets.sh "${CFN_TEMPLATE_BUCKET}" "${AWS_REGION}"'
+          }
+        }
       }
     }
 
     stage('Package and validate') {
       steps {
-        sh '''
-          set -euo pipefail
-          aws cloudformation package \
-            --template-file main.yml \
-            --s3-bucket "${CFN_TEMPLATE_BUCKET}" \
-            --output-template-file "${PACKAGED_TEMPLATE}" \
-            --region "${AWS_REGION}"
-          aws cloudformation validate-template \
-            --template-body file://"${PACKAGED_TEMPLATE}" \
-            --region "${AWS_REGION}"
-        '''
+        script {
+          withAwsCredentials {
+            sh '''
+            set -euo pipefail
+            aws cloudformation package \
+              --template-file main.yml \
+              --s3-bucket "${CFN_TEMPLATE_BUCKET}" \
+              --output-template-file "${PACKAGED_TEMPLATE}" \
+              --region "${AWS_REGION}"
+            aws cloudformation validate-template \
+              --template-body file://"${PACKAGED_TEMPLATE}" \
+              --region "${AWS_REGION}"
+          '''
+          }
+        }
       }
     }
 
     stage('Deploy stack') {
       steps {
-        sh '''
-          set -euo pipefail
-          if aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
-            CHANGE_SET_TYPE=UPDATE
-            aws cloudformation update-stack \
-              --stack-name "${CFN_STACK_NAME}" \
-              --template-body file://"${PACKAGED_TEMPLATE}" \
-              --parameters file://"${DEPLOY_PARAMETERS}" \
-              --capabilities CAPABILITY_NAMED_IAM \
-              --region "${AWS_REGION}" || {
-                msg=$(aws cloudformation describe-stack-events --stack-name "${CFN_STACK_NAME}" \
-                  --region "${AWS_REGION}" --max-items 1 \
-                  --query 'StackEvents[0].ResourceStatusReason' --output text 2>/dev/null || true)
-                echo "$msg" | grep -q "No updates are to be performed"
-              }
-          else
-            CHANGE_SET_TYPE=CREATE
-            aws cloudformation create-stack \
-              --stack-name "${CFN_STACK_NAME}" \
-              --template-body file://"${PACKAGED_TEMPLATE}" \
-              --parameters file://"${DEPLOY_PARAMETERS}" \
-              --capabilities CAPABILITY_NAMED_IAM \
-              --region "${AWS_REGION}"
-          fi
-          echo "${CHANGE_SET_TYPE}" > .cfn-change-type
-        '''
+        script {
+          withAwsCredentials {
+            sh '''
+            set -euo pipefail
+            if aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+              CHANGE_SET_TYPE=UPDATE
+              aws cloudformation update-stack \
+                --stack-name "${CFN_STACK_NAME}" \
+                --template-body file://"${PACKAGED_TEMPLATE}" \
+                --parameters file://"${DEPLOY_PARAMETERS}" \
+                --capabilities CAPABILITY_NAMED_IAM \
+                --region "${AWS_REGION}" || {
+                  msg=$(aws cloudformation describe-stack-events --stack-name "${CFN_STACK_NAME}" \
+                    --region "${AWS_REGION}" --max-items 1 \
+                    --query 'StackEvents[0].ResourceStatusReason' --output text 2>/dev/null || true)
+                  echo "$msg" | grep -q "No updates are to be performed"
+                }
+            else
+              CHANGE_SET_TYPE=CREATE
+              aws cloudformation create-stack \
+                --stack-name "${CFN_STACK_NAME}" \
+                --template-body file://"${PACKAGED_TEMPLATE}" \
+                --parameters file://"${DEPLOY_PARAMETERS}" \
+                --capabilities CAPABILITY_NAMED_IAM \
+                --region "${AWS_REGION}"
+            fi
+            echo "${CHANGE_SET_TYPE}" > .cfn-change-type
+          '''
+          }
+        }
       }
     }
 
@@ -153,39 +170,64 @@ pipeline {
         expression { return params.WAIT_FOR_STACK }
       }
       steps {
-        sh '''
-          set -euo pipefail
-          CHANGE_SET_TYPE=$(cat .cfn-change-type)
-          if [ "$CHANGE_SET_TYPE" = "CREATE" ]; then
-            aws cloudformation wait stack-create-complete --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}"
-          else
-            aws cloudformation wait stack-update-complete --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" || true
-          fi
-          aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
-            --query 'Stacks[0].StackStatus' --output text
-        '''
+        script {
+          withAwsCredentials {
+            sh '''
+            set -euo pipefail
+            CHANGE_SET_TYPE=$(cat .cfn-change-type)
+            if [ "$CHANGE_SET_TYPE" = "CREATE" ]; then
+              aws cloudformation wait stack-create-complete --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}"
+            else
+              aws cloudformation wait stack-update-complete --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" || true
+            fi
+            aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+              --query 'Stacks[0].StackStatus' --output text
+          '''
+          }
+        }
       }
     }
 
     stage('Stack outputs') {
       steps {
-        sh '''
-          aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
-            --query 'Stacks[0].Outputs' --output table
-        '''
+        script {
+          withAwsCredentials {
+            sh '''
+            aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+              --query 'Stacks[0].Outputs' --output table
+          '''
+          }
+        }
       }
     }
   }
 
   post {
     failure {
-      sh '''
-        set +e
-        aws cloudformation describe-stack-events --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
-          --max-items 20 \
-          --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[Timestamp,LogicalResourceId,ResourceStatusReason]' \
-          --output table
-      '''
+      steps {
+        script {
+          withAwsCredentials {
+            sh '''
+              set +e
+              aws cloudformation describe-stack-events --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+                --max-items 20 \
+                --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[Timestamp,LogicalResourceId,ResourceStatusReason]' \
+                --output table
+            '''
+          }
+        }
+      }
     }
+  }
+}
+
+void withAwsCredentials(Closure body) {
+  withCredentials([[
+    $class: 'AmazonWebServicesCredentialsBinding',
+    credentialsId: 'aws-creds',
+    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY',
+  ]]) {
+    body()
   }
 }
