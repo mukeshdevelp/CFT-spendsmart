@@ -361,8 +361,8 @@ pipeline {
       steps {
         script {
           withAwsCredentials {
-            sh '''
-            set -euo pipefail
+            sh script: '''
+            set -eu
             BASTION_ID=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
               --query "Stacks[0].Outputs[?OutputKey=='BastionInstanceId'].OutputValue" --output text)
             PREFIX="bastion-assets/helm-deploy-${BUILD_NUMBER}"
@@ -391,7 +391,7 @@ pipeline {
               ]" --region "${AWS_REGION}" --query Command.CommandId --output text)
             bash scripts/wait-ssm-command.sh "${CMD_ID}" "$BASTION_ID" "${AWS_REGION}"
             aws s3 rm "s3://${CFN_TEMPLATE_BUCKET}/${PREFIX}/" --recursive
-            '''
+            ''', shell: 'bash'
           }
         }
       }
@@ -405,10 +405,9 @@ pipeline {
 
   post {
     failure {
-      steps {
-        script {
-          withAwsCredentials {
-            sh '''
+      script {
+        withAwsCredentials {
+          sh '''
               set +e
               echo "=== Pipeline failed; fetching bastion cluster diagnostics (see stage Apply secrets above for SSM deploy log) ==="
               BASTION_ID=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
@@ -431,8 +430,7 @@ pipeline {
                 echo "SSM send-command for diagnostics failed (check AWS CLI / IAM)"
               fi
               exit 0
-            '''
-          }
+          '''
         }
       }
     }
