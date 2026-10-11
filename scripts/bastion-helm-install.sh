@@ -28,10 +28,15 @@ WAIT_ARGS=()
 if [ "$HELM_WAIT" = "true" ]; then
   WAIT_ARGS=(--wait --timeout "$HELM_TIMEOUT")
 fi
-helm upgrade --install "$RELEASE_NAME" "$CHART_DIR" \
+if ! helm upgrade --install "$RELEASE_NAME" "$CHART_DIR" \
   --namespace "$NAMESPACE" \
   --create-namespace \
   -f "$VALUES_FILE" \
-  "${WAIT_ARGS[@]}"
+  "${WAIT_ARGS[@]}"; then
+  echo "helm upgrade failed; pod status:"
+  kubectl get pods -n "$NAMESPACE" -o wide || true
+  kubectl get events -n "$NAMESPACE" --sort-by=.lastTimestamp | tail -30 || true
+  exit 1
+fi
 
 kubectl get deploy,svc,pods,cronjob -n "$NAMESPACE"

@@ -16,6 +16,7 @@ install -D -m 0755 "$ROOT/scripts/bastion-apply-chart-secrets.sh" "$STAGING/bast
 install -D -m 0755 "$ROOT/scripts/bastion-helm-install.sh" "$STAGING/bastion-helm-install.sh"
 install -D -m 0755 "$ROOT/scripts/bastion-deploy-keycloak.sh" "$STAGING/bastion-deploy-keycloak.sh"
 install -D -m 0755 "$ROOT/scripts/bastion-configure-keycloak-realm.sh" "$STAGING/bastion-configure-keycloak-realm.sh"
+install -D -m 0755 "$ROOT/scripts/bastion-spendsmart-diag.sh" "$STAGING/bastion-spendsmart-diag.sh"
 
 aws s3 sync "$STAGING/" "s3://${BUCKET}/bastion-assets/" --region "$REGION"
 echo "Synced to s3://${BUCKET}/bastion-assets/"

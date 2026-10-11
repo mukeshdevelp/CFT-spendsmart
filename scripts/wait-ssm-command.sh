@@ -14,8 +14,15 @@ for _ in $(seq 1 120); do
       exit 0
       ;;
     Failed|Cancelled|TimedOut)
+      echo "=== SSM command ${STATUS}: ${CMD_ID} on ${INSTANCE_ID} ==="
       aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
-        --region "$REGION" --query '[StandardOutputContent,StandardErrorContent]' --output text
+        --region "$REGION" --query StatusDetails --output text 2>/dev/null || true
+      echo "--- stdout ---"
+      aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+        --region "$REGION" --query StandardOutputContent --output text 2>/dev/null || true
+      echo "--- stderr ---"
+      aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+        --region "$REGION" --query StandardErrorContent --output text 2>/dev/null || true
       exit 1
       ;;
   esac

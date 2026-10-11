@@ -405,18 +405,34 @@ pipeline {
 
   post {
     failure {
-      script {
-        withAwsCredentials {
-          sh '''
-            set +e
-            BASTION_ID=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
-              --query "Stacks[0].Outputs[?OutputKey=='BastionInstanceId'].OutputValue" --output text 2>/dev/null)
-            if [ -n "$BASTION_ID" ]; then
-              aws ssm send-command --instance-ids "$BASTION_ID" --document-name AWS-RunShellScript \
-                --parameters 'commands=["export KUBECONFIG=/home/ec2-user/.kube/config","kubectl get pods -n '"${K8S_NAMESPACE}"' -o wide","kubectl get events -n '"${K8S_NAMESPACE}"' --sort-by=.lastTimestamp | tail -20"]' \
-                --region "${AWS_REGION}" --output text
-            fi
-          '''
+      steps {
+        script {
+          withAwsCredentials {
+            sh '''
+              set +e
+              echo "=== Pipeline failed; fetching bastion cluster diagnostics (see stage Apply secrets above for SSM deploy log) ==="
+              BASTION_ID=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+                --query "Stacks[0].Outputs[?OutputKey=='BastionInstanceId'].OutputValue" --output text 2>/dev/null || true)
+              if [ -z "$BASTION_ID" ] || [ "$BASTION_ID" = "None" ]; then
+                echo "No BastionInstanceId from stack; skipping SSM diagnostics"
+                exit 0
+              fi
+              aws s3 cp scripts/bastion-spendsmart-diag.sh "s3://${CFN_TEMPLATE_BUCKET}/bastion-assets/bastion-spendsmart-diag.sh" --region "${AWS_REGION}" 2>/dev/null || true
+              CMD_ID=$(aws ssm send-command --instance-ids "$BASTION_ID" --document-name AWS-RunShellScript \
+                --parameters "commands=[
+                  \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/bastion-assets/bastion-spendsmart-diag.sh /tmp/bastion-spendsmart-diag.sh || true\",
+                  \"chmod +x /tmp/bastion-spendsmart-diag.sh 2>/dev/null || true\",
+                  \"sudo -u ec2-user /tmp/bastion-spendsmart-diag.sh ${K8S_NAMESPACE}\"
+                ]" \
+                --region "${AWS_REGION}" --query Command.CommandId --output text 2>/dev/null)
+              if [ -n "$CMD_ID" ] && [ "$CMD_ID" != "None" ]; then
+                bash scripts/wait-ssm-command.sh "$CMD_ID" "$BASTION_ID" "${AWS_REGION}" || true
+              else
+                echo "SSM send-command for diagnostics failed (check AWS CLI / IAM)"
+              fi
+              exit 0
+            '''
+          }
         }
       }
     }
