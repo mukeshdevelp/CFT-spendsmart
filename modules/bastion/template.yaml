@@ -118,6 +118,14 @@ Parameters:
   EksRegion:
     Type: String
 
+  EksClusterSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: EKS cluster security group (private API); bastion must reach 443 before bootstrap.
+
+  EksNodesSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: EKS worker node security group.
+
   BastionKubectlVersion:
     Type: String
     Default: '1.36.2'
@@ -258,10 +266,48 @@ Resources:
           Value: dev
         - Key: ManagedBy
           Value: CFT
+
+  BastionHttpsToEksApiIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CreateBastion
+    Properties:
+      GroupId: !Ref EksClusterSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref BastionSecurityGroup
+      Description: HTTPS from bastion to EKS private API (required during bootstrap)
+
+  BastionSshToEksNodesIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CreateBastion
+    Properties:
+      GroupId: !Ref EksNodesSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId: !Ref BastionSecurityGroup
+      Description: SSH from bastion to EKS worker nodes
+
+  BastionHttpsToEksNodesIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CreateBastion
+    Properties:
+      GroupId: !Ref EksNodesSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref BastionSecurityGroup
+      Description: HTTPS from bastion to worker nodes
+
   BastionInstance:
     Type: AWS::EC2::Instance
     Condition: CreateBastion
-    DependsOn: BastionEksAccessEntry
+    DependsOn:
+      - BastionEksAccessEntry
+      - BastionHttpsToEksApiIngress
+      - BastionHttpsToEksNodesIngress
+      - BastionSshToEksNodesIngress
     Properties:
       ImageId: !Ref BastionAmiSsmParameter
       InstanceType: !Ref BastionInstanceType

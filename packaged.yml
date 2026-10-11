@@ -172,7 +172,7 @@ Resources:
     - Eks
     - Db
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/0066df9bdeb020c71b53ffd8616768ba.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/02f9e82fcacf69ae228db654b524424e.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix
@@ -352,7 +352,7 @@ Resources:
     - Db
     - Eks
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/3113544d853ebd36e62b819f275937ab.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/d48492c6b31ac56e677afdc3152a8516.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix
