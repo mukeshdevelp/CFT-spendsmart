@@ -32,7 +32,7 @@ Resources:
       Name: !Sub '${NamePrefix}/clickhouse'
       Description: SpendSmart ClickHouse on node group 2
       GenerateSecretString:
-        SecretStringTemplate: '{"username":"default","database":"spendsmart"}'
+        SecretStringTemplate: '{"username":"dba","database":"cost"}'
         GenerateStringKey: password
         PasswordLength: 32
         ExcludeCharacters: '"@/\\''`$<>&;|'
@@ -64,6 +64,6 @@ Outputs:
   ClickHouseNativePort:
     Value: '9000'
   ClickHouseDatabase:
-    Value: spendsmart
+    Value: cost
   ClickHouseUsername:
-    Value: default
+    Value: dba

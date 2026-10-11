@@ -1,6 +1,0 @@
----
-- name: Write rendered Helm values file
-  ansible.builtin.copy:
-    content: "{{ helm_values_yaml }}"
-    dest: "{{ rendered_values_file }}"
-    mode: "0644"

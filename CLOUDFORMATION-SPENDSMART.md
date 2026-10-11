@@ -2,9 +2,33 @@
 
 Application deploy is **`modules/spendsmart`** nested in **`main.yml`** (parameter `DeploySpendSmart=true`).
 
+## Local Minikube parity (`spendsmart` namespace)
+
+Same names and keys as [local Harbor guide](https://github.com/mukeshdevelp/spendsmart-deployment-local-repo/blob/main/Readme.md) steps 6, 12–15:
+
+| Resource | Local | AWS (CFN) |
+|----------|-------|-----------|
+| `harbor-ldc-coe-regcred` | docker-registry | From `{NamePrefix}/harbor-pull` SM |
+| `encryption-key` | **`GPG_KEY`** (local cluster) | `{NamePrefix}/spendsmart-encryption-key` SM |
+| `clickhouse` | 7 keys, host `clickhouse`, port `8123`, user `dba`, db `cost` | Same keys; `clickhouse` = ExternalName → `clickhouse.databases.svc.cluster.local` |
+| `clickhouse-db` | 6 keys | Same (engine off; secret still created) |
+| ConfigMaps | `uniteconpro-frontend`, `spendsmart-frontend-nginx` | Created by Helm chart |
+
+Export local cluster snapshot: `bash scripts/export-spendsmart-cluster-spec.sh`
+
+ALB DNS comes from stack output **`AlbDnsName`** (nested `Alb` module). Scripts read it automatically:
+
+```bash
+bash scripts/cfn-alb-urls.sh                    # export ALB_DNS, FRONTEND_URL, ...
+python3 scripts/cfn-fetch-alb-dns.py --json
+python3 scripts/render-helm-values-from-spec.py # uses CFN_STACK_NAME + AlbDnsName → :8080/:8081/:8083
+```
+
+Audit (local or EKS): `bash scripts/audit-spendsmart-namespace.sh spendsmart`
+
 ## Flow
 
-1. **`modules/db`** — Secrets Manager `{NamePrefix}/clickhouse` with `username`, `database`, generated `password`.
+1. **`modules/db`** — Secrets Manager `{NamePrefix}/clickhouse` with `username=dba`, `database=cost`, generated `password`.
 2. **`modules/bastion`** — bootstrap installs ClickHouse/Postgres in `databases` using that secret (`clickhouse-auth`).
 3. **`modules/alb`** — one ALB, three listeners:
    - **8080** → NodePort **30080** (frontend)

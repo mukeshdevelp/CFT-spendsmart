@@ -258,7 +258,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Condition: CreateNewEksCluster
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/11dd0c8bfc2dbe062d13e34f59fe14d6.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/a2150db4d3e2df5923ad5264f9b0b974.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix
@@ -287,14 +287,6 @@ Resources:
           Fn::GetAtt:
           - Network
           - Outputs.PublicSubnet2Id
-        PrivateSubnet1Id:
-          Fn::GetAtt:
-          - Network
-          - Outputs.PrivateSubnet1Id
-        PrivateSubnet2Id:
-          Fn::GetAtt:
-          - Network
-          - Outputs.PrivateSubnet2Id
         EksClusterName: spendsmart
         NodesSecurityGroupId:
           Fn::GetAtt:
@@ -327,7 +319,7 @@ Resources:
     - Alb
     - Bastion
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/f725692a33e946d5a7eb25713b2b1945.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/dece8fdc02ffdf4e890656b6417fdc7c.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix

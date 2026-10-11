@@ -1,9 +1,0 @@
-{
-  "auths": {
-    "{{ harbor_docker_server }}": {
-      "username": "{{ harbor_docker_username }}",
-      "password": "{{ harbor_docker_password }}",
-      "auth": "{{ (harbor_docker_username + ':' + harbor_docker_password) | b64encode }}"
-    }
-  }
-}

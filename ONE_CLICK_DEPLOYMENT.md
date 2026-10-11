@@ -13,10 +13,10 @@ This guide deploys the modular CloudFormation root stack in `main.yml`. Its nest
 | EKS add-ons, including Pod Identity Agent | EKS | Cluster networking, DNS, service routing, and pod identity |
 | Load Balancer Controller IAM role and Pod Identity association | CloudFormation / EKS | Grants the controller AWS permissions without static credentials |
 | S3 bucket, Glue database/role, Athena workgroup, and analytics IAM resources | CloudFormation | Data storage, catalog/query, and analytics access |
-| AWS Load Balancer Controller | Helm / Kubernetes | Watches Ingress resources and provisions AWS load-balancing resources |
-| Application ALB and target group | Load Balancer Controller | Routes requests and registers worker nodes for the SpendSmart Ingress |
+| Application ALB (8080 / 8081 / 8083) | CloudFormation `modules/alb` | Frontend, backend, Keycloak listeners |
+| SpendSmart app (Helm + Keycloak) | CloudFormation `modules/spendsmart` | When `DeploySpendSmart=true` and Harbor params set |
 
-`main.yml` is infra only (EKS, bastion bootstrap, in-cluster databases). Deploy the application with **Jenkinsfile.helm** (direct Helm on the bastion). See [helm-deployment.md](helm-deployment.md).
+See [CLOUDFORMATION-SPENDSMART.md](CLOUDFORMATION-SPENDSMART.md) for Harbor and app URLs.
 
 ## Pre-requisites
 
@@ -105,72 +105,17 @@ aws cloudformation describe-stack-events \
   --region us-east-1
 ```
 
-## Deploy SpendSmart
+## Deploy SpendSmart (same stack)
 
-Deploy the infrastructure first with the default `DeploySpendSmart=false`. From a network connected to the private EKS API, configure kubectl and create the namespace:
-
-```sh
-aws eks update-kubeconfig --region us-east-1 --name spendsmart
-kubectl get nodes
-kubectl create namespace spendsmart
-```
-
-### Provision Kubernetes Secrets
-
-The Helm chart references existing Secrets; the CloudFormation/Helm deployment module does not create or populate them. Use your approved secret manager to place the values in protected files on a host with `kubectl` access to the cluster. Keep these files outside the repository, restrict their file permissions, and do not paste secret values into command arguments or commit them.
-
-For the image-pull credential, provide a Docker `config.json` from your approved Harbor credential process. Apply it as the Kubernetes Docker config Secret:
+Set Harbor credentials (`deploy/harbor.env` or Jenkins `harbor-creds`). `parameters.json` defaults `DeploySpendSmart=true`.
 
 ```sh
-kubectl create secret generic harbor-ldc-coe-regcred \
-  --namespace spendsmart \
-  --type kubernetes.io/dockerconfigjson \
-  --from-file=.dockerconfigjson=/secure/spendsmart/harbor-config.json \
-  --dry-run=client -o yaml | kubectl apply -f -
+bash scripts/cfn-deploy-with-harbor.sh
 ```
 
-For each application Secret, create a protected env file containing the exact `KEY=value` entries expected by the corresponding application. The file name below is the Kubernetes Secret name; its contents become environment variables because the chart uses `envFrom`:
+Stack outputs: `SpendSmartFrontendUrl` (:8080), `SpendSmartBackendUrl` (:8081), `SpendSmartKeycloakUrl` (:8083).
 
-```sh
-for secret_name in encryption-key clickhouse clickhouse-db aws-access base-url gemini-key postgres-config; do
-  kubectl create secret generic "$secret_name" \
-    --namespace spendsmart \
-    --from-env-file="/secure/spendsmart/$secret_name.env" \
-    --dry-run=client -o yaml | kubectl apply -f -
-done
-```
-
-The approved secret-management process must supply the application-specific keys and values; do not guess key names or put credentials in Helm values. `kubectl apply` makes this repeatable for creating or updating the Secrets. Confirm that all required names exist without displaying their data:
-
-```sh
-kubectl get secrets -n spendsmart \
-  harbor-ldc-coe-regcred encryption-key clickhouse clickhouse-db \
-  aws-access base-url gemini-key postgres-config
-```
-
-Only after that check succeeds, enable the SpendSmart module.
-
-Package `main.yml` again and update the stack with `DeploySpendSmart=true`:
-
-```sh
-aws cloudformation package --template-file main.yml --s3-bucket <TEMPLATE_BUCKET> \
-  --output-template-file packaged.yml --region us-east-1
-aws cloudformation deploy --template-file packaged.yml --stack-name spendsmart-dev \
-  --parameter-overrides DeploySpendSmart=true \
-  --capabilities CAPABILITY_NAMED_IAM --region us-east-1
-```
-
-For environment-specific, non-secret overrides, set both `SpendSmartValuesS3Uri` and `SpendSmartValuesS3ObjectArn` to the URI and exact object ARN. Never put credentials in this file.
-
-The module installs the AWS Load Balancer Controller and chart from `feature/spendsmart-helm-chart`, changes the frontend Service to `NodePort`, and applies an Ingress with `target-type: instance`. Verify the Ingress and target health:
-
-```sh
-kubectl -n kube-system get deployment aws-load-balancer-controller
-kubectl -n spendsmart get ingress spendsmart
-kubectl -n spendsmart describe ingress spendsmart
-```
-
-The ALB DNS name appears in the Ingress `ADDRESS` field. The controller owns and reconciles the target group and worker-node registration.
+Deployment host logs (SSM): `sudo tail -f /var/log/spendsmart-helm-install.log`
 
 ## Troubleshooting
 

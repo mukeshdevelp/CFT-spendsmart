@@ -201,8 +201,6 @@ Resources:
         VpcId: !GetAtt Network.Outputs.VpcId
         PublicSubnet1Id: !GetAtt Network.Outputs.PublicSubnet1Id
         PublicSubnet2Id: !GetAtt Network.Outputs.PublicSubnet2Id
-        PrivateSubnet1Id: !GetAtt Network.Outputs.PrivateSubnet1Id
-        PrivateSubnet2Id: !GetAtt Network.Outputs.PrivateSubnet2Id
         EksClusterName: spendsmart
         NodesSecurityGroupId: !GetAtt Eks.Outputs.EksNodesSecurityGroupId
         AlbName: spendsmart-dev-alb

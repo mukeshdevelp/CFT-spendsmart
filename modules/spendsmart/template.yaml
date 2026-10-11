@@ -47,13 +47,17 @@ Parameters:
     Type: String
   ClickHouseHost:
     Type: String
-    Default: clickhouse.databases.svc.cluster.local
+    Default: clickhouse
+    Description: Same as local Minikube guide (short name); ExternalName Service points to databases ClickHouse
   ClickHouseHttpPort:
     Type: String
     Default: '8123'
-  ClickHouseNativePort:
+  ClickHouseTable:
     Type: String
-    Default: '9000'
+    Default: service_costs
+  ClickHouseTls:
+    Type: String
+    Default: 'false'
   HarborRegistry:
     Type: String
     Default: harbor.ldc.opstree.dev
@@ -96,10 +100,10 @@ Resources:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub '${NamePrefix}/spendsmart-encryption-key'
-      Description: ENCRYPTION_KEY for SpendSmart backend
+      Description: GPG_KEY for SpendSmart backend (matches local encryption-key secret)
       GenerateSecretString:
         SecretStringTemplate: '{}'
-        GenerateStringKey: ENCRYPTION_KEY
+        GenerateStringKey: GPG_KEY
         PasswordLength: 48
         ExcludeCharacters: '"@/\\''`$<>&;|'
 
@@ -187,8 +191,7 @@ Resources:
     Properties:
       ImageId: !Ref DeploymentAmi
       InstanceType: !Ref DeploymentInstanceType
-      IamInstanceProfile:
-        Arn: !GetAtt DeploymentInstanceProfile.Arn
+      IamInstanceProfile: !Ref DeploymentInstanceProfile
       SubnetId: !Ref PrivateSubnetId
       SecurityGroupIds:
         - !Ref DeploymentSecurityGroup
@@ -207,7 +210,7 @@ Resources:
             on_error() {
               signal_cfn 1 "SpendSmart deploy failed at line $$1: $$(tail -c 3800 $$LOG)"
             }
-            trap 'on_error $LINENO' ERR
+            trap 'on_error $$LINENO' ERR
             set -euo pipefail
             dnf install -y git tar gzip aws-cfn-bootstrap python3
             command -v curl >/dev/null || dnf install -y curl-minimal
@@ -226,9 +229,20 @@ Resources:
             CHPASS=$$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["password"])' "$$CH_JSON")
             CHUSER=$$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["username"])' "$$CH_JSON")
             CHDB=$$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["database"])' "$$CH_JSON")
-            ENC_KEY=$$(aws secretsmanager get-secret-value --secret-id '${NamePrefix}/spendsmart-encryption-key' --region ${AWS::Region} --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)["ENCRYPTION_KEY"])')
+            GPG_KEY=$$(aws secretsmanager get-secret-value --secret-id '${NamePrefix}/spendsmart-encryption-key' --region ${AWS::Region} --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)["GPG_KEY"])')
 
             kubectl create namespace ${Namespace} --dry-run=client -o yaml | kubectl apply -f -
+
+            kubectl apply -f - <<CHSVC
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: clickhouse
+              namespace: ${Namespace}
+            spec:
+              type: ExternalName
+              externalName: clickhouse.databases.svc.cluster.local
+            CHSVC
 
             if aws secretsmanager get-secret-value --secret-id '${NamePrefix}/harbor-pull' --region ${AWS::Region} >/dev/null 2>&1; then
               HARBOR_JSON=$$(aws secretsmanager get-secret-value --secret-id '${NamePrefix}/harbor-pull' --region ${AWS::Region} --query SecretString --output text)
@@ -243,7 +257,7 @@ Resources:
             fi
 
             kubectl -n ${Namespace} create secret generic encryption-key \
-              --from-literal=ENCRYPTION_KEY="$ENC_KEY" \
+              --from-literal=GPG_KEY="$GPG_KEY" \
               --dry-run=client -o yaml | kubectl apply -f -
             kubectl -n ${Namespace} create secret generic clickhouse \
               --from-literal=CLICKHOUSE_HOST=${ClickHouseHost} \
@@ -251,13 +265,16 @@ Resources:
               --from-literal=CLICKHOUSE_USER="$CHUSER" \
               --from-literal=CLICKHOUSE_PASSWORD="$CHPASS" \
               --from-literal=CLICKHOUSE_DATABASE="$CHDB" \
+              --from-literal=CLICKHOUSE_TABLE=${ClickHouseTable} \
+              --from-literal=CLICKHOUSE_TLS=${ClickHouseTls} \
               --dry-run=client -o yaml | kubectl apply -f -
             kubectl -n ${Namespace} create secret generic clickhouse-db \
               --from-literal=CLICKHOUSE_HOST=${ClickHouseHost} \
-              --from-literal=CLICKHOUSE_PORT=${ClickHouseNativePort} \
+              --from-literal=CLICKHOUSE_PORT=${ClickHouseHttpPort} \
               --from-literal=CLICKHOUSE_USER="$CHUSER" \
               --from-literal=CLICKHOUSE_PASSWORD="$CHPASS" \
               --from-literal=CLICKHOUSE_DATABASE="$CHDB" \
+              --from-literal=CLICKHOUSE_TABLE=${ClickHouseTable} \
               --dry-run=client -o yaml | kubectl apply -f -
 
             API_URL="http://${AlbDnsName}:${BackendListenerPort}"
@@ -267,6 +284,9 @@ Resources:
               - name: harbor-ldc-coe-regcred
             backend:
               enabled: true
+              image:
+                repository: harbor.ldc.opstree.dev/coe/uniteconpro-backend-prod
+                tag: latest
               nodeSelector:
                 spendsmart.io/workload: backend
               service:
@@ -274,22 +294,36 @@ Resources:
               annotations: {}
             frontend:
               enabled: true
+              image:
+                repository: harbor.ldc.opstree.dev/coe/uniteconpro-frontend-prod
+                tag: latest
               nodeSelector:
                 spendsmart.io/workload: frontend
               service:
                 type: NodePort
               configMap:
+                name: uniteconpro-frontend
                 data:
                   VITE_API_BASE_URL: "$API_URL"
                   VITE_CLOUD_SENTRY_API_BASE_URL: ""
                   VITE_KEYCLOAK_CLIENT_ID: spendsmart-frontend
                   VITE_KEYCLOAK_REALM: spendsmart
                   VITE_KEYCLOAK_URL: "$KC_URL"
+              nginx:
+                enabled: true
+                configMap:
+                  name: spendsmart-frontend-nginx
               annotations: {}
             cloudsentry:
               enabled: false
             engine:
-              enabled: false
+              enabled: true
+              image:
+                repository: harbor.ldc.opstree.dev/coe/uniteconpro-engine-dev
+                tag: latest
+              schedule: "5 11,23 * * *"
+              nodeSelector:
+                spendsmart.io/workload: backend
             EOF
 
             kubectl apply -f - <<KEYCLOAK
@@ -312,7 +346,7 @@ Resources:
                     spendsmart.io/workload: frontend
                   containers:
                     - name: keycloak
-                      image: quay.io/keycloak/keycloak:25.0
+                      image: quay.io/keycloak/keycloak:latest
                       args: ["start-dev"]
                       env:
                         - name: KEYCLOAK_ADMIN
@@ -354,7 +388,18 @@ Resources:
             patch_np spendsmart-frontend ${FrontendNodePort} 80 80
             patch_np spendsmart-backend ${BackendNodePort} 80 8000
 
-            kubectl -n ${Namespace} get deploy,svc,pods
+            echo "=== spendsmart namespace secrets (local guide parity) ==="
+            kubectl get secrets -n ${Namespace} \
+              harbor-ldc-coe-regcred encryption-key clickhouse clickhouse-db
+            CH_KEYS=$$(kubectl get secret clickhouse -n ${Namespace} -o json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]))')
+            CHDB_KEYS=$$(kubectl get secret clickhouse-db -n ${Namespace} -o json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]))')
+            test "$$CH_KEYS" = "7" || { echo "clickhouse secret must have 7 keys (local guide)"; exit 1; }
+            test "$$CHDB_KEYS" = "6" || { echo "clickhouse-db secret must have 6 keys (local guide)"; exit 1; }
+            echo "=== spendsmart configmaps (from Helm chart) ==="
+            kubectl get configmaps -n ${Namespace} uniteconpro-frontend spendsmart-frontend-nginx 2>/dev/null || \
+              kubectl get configmaps -n ${Namespace}
+
+            kubectl -n ${Namespace} get deploy,svc,pods,configmaps
             signal_cfn 0 "SpendSmart frontend/backend/keycloak deployed"
       Tags:
         - Key: Name

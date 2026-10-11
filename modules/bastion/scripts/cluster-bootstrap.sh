@@ -56,12 +56,15 @@ kubectl -n databases create secret generic postgres-auth \
   --from-literal=username=dbadmin --from-literal=password="$PGPASS" --from-literal=database=cloudsentry \
   --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n databases create secret generic clickhouse-auth \
-  --from-literal=username=default --from-literal=password="$CHPASS" --from-literal=database=spendsmart \
+  --from-literal=username=dba --from-literal=password="$CHPASS" --from-literal=database=cost \
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl apply -f "${MANIFESTS_DIR}/databases.yaml"
 kubectl -n databases rollout status statefulset/postgres --timeout=900s
 kubectl -n databases rollout status statefulset/clickhouse --timeout=900s
+# Local guide parity: database `cost` and user `dba` (image env + grants).
+kubectl -n databases exec statefulset/clickhouse -- clickhouse-client --query "CREATE DATABASE IF NOT EXISTS cost" || true
+kubectl -n databases exec statefulset/clickhouse -- clickhouse-client --query "GRANT ALL ON cost.* TO dba" || true
 kubectl -n databases get pods -o wide
 
 echo "=== cluster-bootstrap complete ==="

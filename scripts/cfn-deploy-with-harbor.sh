@@ -44,3 +44,24 @@ else
 fi
 
 echo "Stack ${STACK_NAME} deployed."
+
+# ALB DNS + app URLs from stack outputs (main.yml AlbDnsName / SpendSmart*Url)
+if eval "$(bash "${ROOT}/scripts/cfn-alb-urls.sh")" 2>/dev/null; then
+  echo ""
+  echo "=== Application URLs (from CloudFormation) ==="
+  echo "  ALB DNS:     ${ALB_DNS}"
+  echo "  Frontend:    ${FRONTEND_URL}"
+  echo "  Backend API: ${BACKEND_URL}"
+  echo "  Keycloak:    ${KEYCLOAK_URL}"
+  echo ""
+  if [[ -f "${ROOT}/deploy/spendsmart-cluster-spec.json" ]]; then
+    python3 "${ROOT}/scripts/render-helm-values-from-spec.py" \
+      --stack-name "$STACK_NAME" \
+      --region "$REGION" || true
+  else
+    echo "Tip: run ./scripts/export-spendsmart-cluster-spec.sh then render-helm-values-from-spec.py (ALB auto from stack)."
+  fi
+else
+  echo "AlbDnsName not available yet (stack still rolling back or Alb not created). Check:"
+  echo "  aws cloudformation describe-stacks --stack-name ${STACK_NAME} --region ${REGION} --query 'Stacks[0].Outputs'"
+fi

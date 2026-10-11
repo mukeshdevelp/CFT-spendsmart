@@ -98,8 +98,11 @@ CloudFormation outputs are strings. Values representing Terraform maps/lists are
 | `AlbControllerNamespace` | Controller namespace configured for the association |
 | `AlbControllerServiceAccountName` | Controller service-account name configured for the association |
 | `AlbControllerVersion` | Controller release to align with the IAM policy and Helm chart |
-| `AlbDnsName` | Infra ALB DNS (used as Helm parameter for `helm-main.yml`) |
-| `BastionInstanceId` | Bastion for SSM/kubectl during Jenkins Helm pipeline |
+| `AlbDnsName` | Application ALB DNS |
+| `SpendSmartFrontendUrl` | `http://<AlbDns>:8080` (when `DeploySpendSmart=true`) |
+| `SpendSmartBackendUrl` | `http://<AlbDns>:8081` |
+| `SpendSmartKeycloakUrl` | `http://<AlbDns>:8083` |
+| `BastionInstanceId` | Bastion (bootstrap + admin access) |
 | `BucketName` | S3 bucket name |
 | `DataLocation` | S3 URI for the data prefix |
 | `AthenaOutputLocation` | S3 URI for Athena query results |
@@ -111,10 +114,10 @@ CloudFormation outputs are strings. Values representing Terraform maps/lists are
 | `AnalyticsIamPolicyName` | Analytics IAM managed policy name |
 | `AnalyticsIamPolicyArn` | Analytics IAM managed policy ARN |
 
-Application Helm deploy uses **`helm-main.yml`** (separate stack or **Jenkinsfile.helm**), not the root stack. After deploy, the app Ingress ALB DNS is from `kubectl get ingress spendsmart -n spendsmart`.
+SpendSmart is deployed by nested stack **`modules/spendsmart`** inside **`main.yml`** (`DeploySpendSmart=true`).
 
 ## Resource Lifecycle
 
-1. Deploy **`main.yml`** via **Jenkinsfile** (bastion assets synced to S3 first). Wait for bastion bootstrap: nodes Ready and `databases` pods Running.
-2. Run **Jenkinsfile.helm** (runtime secrets + `helm-main.yml`).
-3. Verify ingress and target health. Stack delete removes infra; delete the Helm stack separately if needed.
+1. `bash scripts/sync-bastion-assets.sh <bucket>` then package/deploy **`main.yml`** (Jenkins or CLI; Harbor via `deploy/harbor.env` or Jenkins `harbor-creds`).
+2. Wait for bastion bootstrap (`databases` pods) and **SpendSmart** `DeploymentHost` CFN signal.
+3. Open stack outputs `SpendSmartFrontendUrl`, `SpendSmartBackendUrl`, `SpendSmartKeycloakUrl`.

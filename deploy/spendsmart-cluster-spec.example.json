@@ -1,0 +1,27 @@
+{
+  "comment": "Generated from minikube via scripts/export-spendsmart-cluster-spec.sh — secret values omitted",
+  "requiredSecrets": ["harbor-ldc-coe-regcred", "encryption-key", "clickhouse", "clickhouse-db"],
+  "secretKeys": {
+    "encryption-key": ["GPG_KEY"],
+    "clickhouse": [
+      "CLICKHOUSE_HOST", "CLICKHOUSE_PORT", "CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD",
+      "CLICKHOUSE_DATABASE", "CLICKHOUSE_TABLE", "CLICKHOUSE_TLS"
+    ],
+    "clickhouse-db": [
+      "CLICKHOUSE_HOST", "CLICKHOUSE_PORT", "CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD",
+      "CLICKHOUSE_DATABASE", "CLICKHOUSE_TABLE"
+    ]
+  },
+  "configMaps": {
+    "uniteconpro-frontend": {
+      "VITE_KEYCLOAK_CLIENT_ID": "spendsmart-frontend",
+      "VITE_KEYCLOAK_REALM": "spendsmart"
+    }
+  },
+  "workloadImages": {
+    "deploy/spendsmart-backend": "harbor.ldc.opstree.dev/coe/uniteconpro-backend-prod:latest",
+    "deploy/spendsmart-frontend": "harbor.ldc.opstree.dev/coe/uniteconpro-frontend-prod:latest",
+    "deploy/keycloak": "quay.io/keycloak/keycloak:latest",
+    "cronjob/refresh-days": "harbor.ldc.opstree.dev/coe/uniteconpro-engine-dev:latest"
+  }
+}
