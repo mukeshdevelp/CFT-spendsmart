@@ -108,7 +108,7 @@ pipeline {
           }
           withAwsCredentials {
             sh '''
-            set -euo pipefail
+            set -eu
             command -v aws python3 >/dev/null
             command -v ansible-playbook >/dev/null || { echo "Install ansible on the Jenkins agent"; exit 1; }
             STATUS=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
@@ -138,7 +138,7 @@ pipeline {
     stage('Install Ansible collections') {
       steps {
         sh '''
-        set -euo pipefail
+        set -eu
         cd "${ANSIBLE_DIR}"
         ansible-galaxy collection install -r requirements.yml -p collections
         '''
@@ -177,7 +177,7 @@ inject_cfn_urls: false
           withCredentials(bindings) {
             withAwsCredentials {
               sh '''
-              set -euo pipefail
+              set -eu
               export ANSIBLE_HOST_KEY_CHECKING=False
               export ANSIBLE_PRIVATE_KEY_FILE
               export ANSIBLE_COLLECTIONS_PATH="${WORKSPACE}/ansible/collections"
