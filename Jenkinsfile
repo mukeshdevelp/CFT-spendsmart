@@ -56,6 +56,7 @@ pipeline {
   }
 
   environment {
+    AWS_REGION = "${params.AWS_REGION}"
     AWS_DEFAULT_REGION = "${params.AWS_REGION}"
     PACKAGED_TEMPLATE = 'packaged.yml'
     DEPLOY_PARAMETERS = 'jenkins-parameters.json'

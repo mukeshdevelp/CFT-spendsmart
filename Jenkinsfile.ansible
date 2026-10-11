@@ -81,6 +81,7 @@ pipeline {
   }
 
   environment {
+    AWS_REGION = "${params.AWS_REGION}"
     AWS_DEFAULT_REGION = "${params.AWS_REGION}"
     CFN_STACK_NAME = "${params.CFN_STACK_NAME}"
     NAME_PREFIX = "${params.NAME_PREFIX}"
@@ -111,6 +112,7 @@ pipeline {
             set -eu
             command -v aws python3 >/dev/null
             command -v ansible-playbook >/dev/null || { echo "Install ansible on the Jenkins agent"; exit 1; }
+            python3 -c "import yaml" 2>/dev/null || { echo "Install PyYAML on Jenkins agent: pip install pyyaml"; exit 1; }
             STATUS=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
               --query 'Stacks[0].StackStatus' --output text)
             echo "Infra stack status: ${STATUS}"
@@ -139,8 +141,10 @@ pipeline {
       steps {
         sh '''
         set -eu
-        cd "${ANSIBLE_DIR}"
-        ansible-galaxy collection install -r requirements.yml -p collections
+        export ANSIBLE_CONFIG="${WORKSPACE}/ansible/ansible.cfg"
+        cd "${WORKSPACE}/ansible"
+        ansible-galaxy collection install -r requirements.yml -p "${WORKSPACE}/ansible/collections" --force
+        ansible-galaxy collection list -p "${WORKSPACE}/ansible/collections" | head -20
         '''
       }
     }
@@ -177,18 +181,19 @@ inject_cfn_urls: false
           withCredentials(bindings) {
             withAwsCredentials {
               sh '''
-              set -eu
+              set -eux
+              export ANSIBLE_CONFIG="${WORKSPACE}/ansible/ansible.cfg"
               export ANSIBLE_HOST_KEY_CHECKING=False
-              export ANSIBLE_PRIVATE_KEY_FILE
-              export ANSIBLE_COLLECTIONS_PATH="${WORKSPACE}/ansible/collections"
+              test -f "${ANSIBLE_PRIVATE_KEY_FILE}"
               export ANSIBLE_SECRETS_FILE="${WORKSPACE}/ansible/group_vars/secrets.yml"
-              python3 scripts/jenkins-write-ansible-secrets.py
-              cd ansible
+              python3 "${WORKSPACE}/scripts/jenkins-write-ansible-secrets.py"
+              cd "${WORKSPACE}/ansible"
               ansible-playbook \
                 -i inventory/jenkins-generated.yml \
                 playbooks/deploy-spendsmart.yml \
                 -e @jenkins-extra-vars.yml \
-                --private-key "${ANSIBLE_PRIVATE_KEY_FILE}"
+                --private-key "${ANSIBLE_PRIVATE_KEY_FILE}" \
+                -vv
               rm -f "${ANSIBLE_SECRETS_FILE}" "${WORKSPACE}/ansible/jenkins-extra-vars.yml"
               '''
             }

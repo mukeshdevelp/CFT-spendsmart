@@ -156,6 +156,7 @@ pipeline {
   }
 
   environment {
+    AWS_REGION = "${params.AWS_REGION}"
     AWS_DEFAULT_REGION = "${params.AWS_REGION}"
     CFN_STACK_NAME = "${params.CFN_STACK_NAME}"
     CFN_TEMPLATE_BUCKET = "${params.CFN_TEMPLATE_BUCKET}"

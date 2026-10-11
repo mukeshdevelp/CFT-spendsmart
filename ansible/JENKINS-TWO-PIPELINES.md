@@ -26,7 +26,9 @@ Optional: infra parameter **`TRIGGER_ANSIBLE_DEPLOY`** + job name **`spendsmart-
 
 ## Agent requirements (app job)
 
-`ansible-playbook`, `python3`, `pyyaml`, `aws` CLI, SSH to bastion.
+`ansible-playbook`, `python3`, **PyYAML** (`pip install pyyaml`), `aws` CLI, SSH to bastion.
+
+Collections install into `ansible/collections/` (see `ansible/ansible.cfg` `collections_paths`). If Galaxy warns about paths, ensure `ANSIBLE_CONFIG` points at that `ansible.cfg` (Jenkinsfile sets this).
 
 ## Local test
 
