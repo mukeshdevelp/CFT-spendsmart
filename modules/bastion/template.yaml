@@ -1,109 +1,80 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: SpendSmart bastion nested stack
+Description: Bastion host, EKS access entry, and optional background cluster bootstrap.
+
 Parameters:
   NamePrefix:
     Type: String
     Default: spendsmart-dev
-
   BastionEnabled:
     Type: String
     AllowedValues: ['true', 'false']
     Default: 'true'
-
   BastionAssociateEip:
     Type: String
     AllowedValues: ['true', 'false']
     Default: 'true'
-
   BastionInstanceType:
     Type: String
     Default: t3.micro
-
   BastionAmiSsmParameter:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
-
   BastionRootVolumeSize:
     Type: Number
     Default: 8
-    
   BastionRootVolumeType:
     Type: String
     Default: gp3
-
   BastionRootDeviceName:
     Type: String
     Default: /dev/xvda
-
   Ec2KeyName:
     Type: AWS::EC2::KeyPair::KeyName
-    Description: Existing EC2 key pair in the deployment region.
-    
-
   BastionSshCidrs:
     Type: CommaDelimitedList
-    Default: '0.0.0.0/0,103.87.45.139/32'
-    Description: CIDR allowlist for SSH to the bastion. Including 0.0.0.0/0 permits SSH from any IPv4 address.
-
   TcpProtocol:
     Type: String
     Default: tcp
   AllTrafficProtocol:
     Type: String
     Default: '-1'
-
   BastionNameSuffix:
     Type: String
     Default: -bastion
-
   BastionEipNameSuffix:
     Type: String
     Default: -bastion-eip
-
   BastionSshPort:
     Type: Number
     Default: 22
-
   BastionEgressCidr:
     Type: String
     Default: 0.0.0.0/0
-
   BastionSecurityGroupDescription:
     Type: String
     Default: Bastion host in a public subnet
-
   BastionEgressDescription:
     Type: String
     Default: Bastion egress
-
-  BastionRoleTag:
-    Type: String
-    Default: bastion
-
   BastionMetadataEndpoint:
     Type: String
     AllowedValues: [enabled, disabled]
     Default: enabled
-
   BastionMetadataTokens:
     Type: String
     AllowedValues: [required, optional]
     Default: required
-
   BastionMetadataHopLimit:
     Type: Number
     Default: 2
-
   BastionRootVolumeEncrypted:
     Type: String
     AllowedValues: ['true', 'false']
     Default: 'true'
-
   BastionRootVolumeDeleteOnTermination:
     Type: String
     AllowedValues: ['true', 'false']
     Default: 'true'
-
   EksNodesSshIngressDescription:
     Type: String
     Default: SSH from bastion
@@ -111,32 +82,34 @@ Parameters:
     Type: String
   PublicSubnetId:
     Type: String
-
   EksClusterName:
     Type: String
-
   EksRegion:
     Type: String
-
   EksClusterSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
-    Description: EKS cluster security group (private API); bastion must reach 443 before bootstrap.
-
   EksNodesSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
-    Description: EKS worker node security group.
-
+  BastionRoleName:
+    Type: String
+    Description: IAM role name from modules/iam (bastion instance profile).
+  BastionRoleArn:
+    Type: String
+    Description: IAM role ARN for EKS access entry.
   BastionKubectlVersion:
     Type: String
     Default: '1.36.2'
-
   PostgresSecretName:
     Type: String
-    Default: spendsmart-dev/postgres
-
   ClickHouseSecretName:
     Type: String
-    Default: spendsmart-dev/clickhouse
+  BootstrapAssetsS3Uri:
+    Type: String
+    Description: s3://bucket/bastion-assets prefix synced at package time.
+  RunClusterBootstrap:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
 
 Conditions:
   CreateBastionEip: !And
@@ -145,91 +118,25 @@ Conditions:
   CreateBastion: !Equals [!Ref BastionEnabled, 'true']
   BastionRootDeleteOnTermination: !Equals [!Ref BastionRootVolumeDeleteOnTermination, 'true']
   BastionRootEncrypted: !Equals [!Ref BastionRootVolumeEncrypted, 'true']
+  RunClusterBootstrap: !And
+    - !Condition CreateBastion
+    - !Equals [!Ref RunClusterBootstrap, 'true']
+
 Resources:
-
-
-  BastionRole:
-    Type: AWS::IAM::Role
-    Condition: CreateBastion
-    Properties:
-      RoleName: !Sub '${NamePrefix}-bastion-role'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - ec2.amazonaws.com
-            Action:
-              - sts:AssumeRole
-
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-      Tags:
-        - Key: Name
-          Value: !Sub '${NamePrefix}-bastion-role'
-        - Key: Project
-          Value: spendsmart
-        - Key: Environment
-          Value: dev
-        - Key: ManagedBy
-          Value: CFT
-
-      Policies:
-        - PolicyName: BastionEksAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - eks:DescribeCluster
-                  - eks:ListClusters
-                  - eks:DescribeNodegroup
-                  - eks:ListNodegroups
-                Resource: '*'
-        - PolicyName: BastionDatabaseSecrets
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: secretsmanager:GetSecretValue
-                Resource:
-                  - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${PostgresSecretName}*'
-                  - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ClickHouseSecretName}*'
-        - PolicyName: BastionCfnSignal
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: cloudformation:SignalResource
-                Resource: !Ref AWS::StackId
-
-  ClusterBootstrapHandle:
-    Type: AWS::CloudFormation::WaitConditionHandle
-    Condition: CreateBastion
-
-  ClusterBootstrap:
-    Type: AWS::CloudFormation::WaitCondition
-    Condition: CreateBastion
-    DependsOn: BastionInstance
-    Properties:
-      Handle: !Ref ClusterBootstrapHandle
-      Timeout: '7200'
-
   BastionInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Condition: CreateBastion
     Properties:
       InstanceProfileName: !Sub '${NamePrefix}-bastion-profile'
       Roles:
-        - !Ref BastionRole
+        - !Ref BastionRoleName
 
   BastionEksAccessEntry:
     Type: AWS::EKS::AccessEntry
     Condition: CreateBastion
     Properties:
       ClusterName: !Ref EksClusterName
-      PrincipalArn: !GetAtt BastionRole.Arn
+      PrincipalArn: !Ref BastionRoleArn
       Type: STANDARD
       AccessPolicies:
         - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
@@ -276,7 +183,7 @@ Resources:
       FromPort: 443
       ToPort: 443
       SourceSecurityGroupId: !Ref BastionSecurityGroup
-      Description: HTTPS from bastion to EKS private API (required during bootstrap)
+      Description: HTTPS from bastion to EKS private API
 
   BastionSshToEksNodesIngress:
     Type: AWS::EC2::SecurityGroupIngress
@@ -313,309 +220,46 @@ Resources:
       InstanceType: !Ref BastionInstanceType
       IamInstanceProfile: !Ref BastionInstanceProfile
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          LOG=/var/log/spendsmart-cluster-bootstrap.log
-          exec > >(tee -a "$LOG") 2>&1
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euo pipefail
+            dnf install -y aws-cfn-bootstrap python3
+            command -v curl >/dev/null || dnf install -y curl-minimal
+            mkdir -p /opt/spendsmart/manifests
+            aws s3 sync "${BootstrapAssetsS3Uri}/" /opt/spendsmart/ --region ${AWS::Region}
+            chmod +x /opt/spendsmart/cluster-bootstrap.sh
+            if [ "${RunBootstrapFlag}" = "true" ]; then
+              cat >/etc/systemd/system/spendsmart-cluster-bootstrap.service <<UNIT
+            [Unit]
+            Description=SpendSmart EKS cluster bootstrap (kubectl + databases)
+            After=network-online.target
+            Wants=network-online.target
 
-          signal_cfn() {
-            local code="$1"
-            local reason="$2"
-            /opt/aws/bin/cfn-signal -e "$code" \
-              --stack ${AWS::StackName} \
-              --resource ClusterBootstrap \
-              --region ${AWS::Region} \
-              --reason "$reason"
-          }
+            [Service]
+            Type=oneshot
+            Environment=EKS_REGION=${EksRegion}
+            Environment=EKS_CLUSTER_NAME=${EksClusterName}
+            Environment=POSTGRES_SECRET_NAME=${PostgresSecretName}
+            Environment=CLICKHOUSE_SECRET_NAME=${ClickHouseSecretName}
+            Environment=KUBECTL_VERSION=${BastionKubectlVersion}
+            Environment=MANIFESTS_DIR=/opt/spendsmart/manifests
+            ExecStart=/opt/spendsmart/cluster-bootstrap.sh
+            RemainAfterExit=yes
 
-          on_error() {
-            local line="$1"
-            local reason
-            reason=$(tail -c 3800 "$LOG")
-            signal_cfn 1 "bootstrap failed at line $line: $reason"
-          }
-          trap 'on_error $LINENO' ERR
-          set -euo pipefail
-
-          # AL2023 includes curl-minimal; installing the curl package conflicts and breaks bootstrap.
-          dnf install -y aws-cfn-bootstrap python3
-          command -v curl >/dev/null || dnf install -y curl-minimal
-
-          echo "Installing kubectl ${BastionKubectlVersion}..."
-
-          curl -fL \
-            -o /usr/local/bin/kubectl \
-            https://dl.k8s.io/release/v${BastionKubectlVersion}/bin/linux/amd64/kubectl
-
-          chmod +x /usr/local/bin/kubectl
-
-          kubectl version --client
-
-          echo "Waiting for EKS cluster..."
-
-          until aws eks describe-cluster \
-            --region ${EksRegion} \
-            --name ${EksClusterName} \
-            >/dev/null 2>&1
-          do
-            echo "EKS cluster is not ready yet..."
-            sleep 30
-          done
-
-          echo "EKS cluster is available."
-
-          mkdir -p /home/ec2-user/.kube
-
-          aws eks update-kubeconfig \
-            --region ${EksRegion} \
-            --name ${EksClusterName} \
-            --kubeconfig /home/ec2-user/.kube/config
-
-          chown -R ec2-user:ec2-user /home/ec2-user/.kube
-          chmod 600 /home/ec2-user/.kube/config
-
-          mkdir -p /root/.kube
-          cp /home/ec2-user/.kube/config /root/.kube/config
-          chmod 600 /root/.kube/config
-
-          cat >/usr/local/bin/refresh-kubeconfig <<EOF
-          #!/bin/bash
-          mkdir -p "\$HOME/.kube"
-          aws eks update-kubeconfig --region ${EksRegion} --name ${EksClusterName} --kubeconfig "\$HOME/.kube/config"
-          chmod 600 "\$HOME/.kube/config"
-          EOF
-          chmod 755 /usr/local/bin/refresh-kubeconfig
-          echo 'export KUBECONFIG=$HOME/.kube/config' >/etc/profile.d/eks.sh
-          echo '[ -s "$KUBECONFIG" ] || /usr/local/bin/refresh-kubeconfig' >>/etc/profile.d/eks.sh
-
-          echo 'export KUBECONFIG=/home/ec2-user/.kube/config' >> /home/ec2-user/.bashrc
-          echo 'alias k=kubectl' >> /home/ec2-user/.bashrc
-
-          echo 'export KUBECONFIG=/root/.kube/config' >> /root/.bashrc
-          echo 'alias k=kubectl' >> /root/.bashrc
-
-          echo "Waiting for EKS Kubernetes access..."
-
-          until kubectl \
-            --kubeconfig /home/ec2-user/.kube/config \
-            get nodes \
-            >/dev/null 2>&1
-          do
-            echo "Waiting for EKS access..."
-            sleep 10
-          done
-
-          export KUBECONFIG=/root/.kube/config
-          kubectl get nodes -o wide
-          kubectl get pods -A
-
-          echo "Waiting for four worker nodes (2 per node group)..."
-          for _ in $(seq 1 90); do
-            count=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)
-            if [ "$count" -ge 4 ]; then break; fi
-            sleep 20
-          done
-          kubectl wait --for=condition=Ready node --all --timeout=900s
-
-          mapfile -t APP_NODES < <(kubectl get nodes -l spendsmart.io/role=app -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
-          mapfile -t DATA_NODES < <(kubectl get nodes -l spendsmart.io/role=data -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
-          test "${!#APP_NODES[@]}" -ge 2
-          test "${!#DATA_NODES[@]}" -ge 1
-          kubectl label node "${!APP_NODES[0]}" spendsmart.io/workload=backend --overwrite
-          kubectl label node "${!APP_NODES[1]}" spendsmart.io/workload=frontend --overwrite
-          kubectl label node "${!DATA_NODES[0]}" spendsmart.io/workload=database --overwrite
-
-          PGPASS=$(aws secretsmanager get-secret-value --secret-id '${PostgresSecretName}' --region ${AWS::Region} --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')
-          CHPASS=$(aws secretsmanager get-secret-value --secret-id '${ClickHouseSecretName}' --region ${AWS::Region} --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')
-
-          kubectl create namespace databases --dry-run=client -o yaml | kubectl apply -f -
-          kubectl -n databases create secret generic postgres-auth --from-literal=username=dbadmin --from-literal=password="$PGPASS" --from-literal=database=cloudsentry --dry-run=client -o yaml | kubectl apply -f -
-          kubectl -n databases create secret generic clickhouse-auth --from-literal=username=default --from-literal=password="$CHPASS" --from-literal=database=spendsmart --dry-run=client -o yaml | kubectl apply -f -
-
-          python3 - <<'PY'
-          import textwrap
-          open("/tmp/spendsmart-dbs.yaml", "w").write(textwrap.dedent("""
-          apiVersion: apps/v1
-          kind: StatefulSet
-          metadata:
-            name: postgres
-            namespace: databases
-          spec:
-            serviceName: postgres
-            replicas: 1
-            selector:
-              matchLabels:
-                app: postgres
-            template:
-              metadata:
-                labels:
-                  app: postgres
-              spec:
-                nodeSelector:
-                  spendsmart.io/workload: database
-                tolerations:
-                  - key: spendsmart.io/role
-                    operator: Equal
-                    value: data
-                    effect: NoSchedule
-                initContainers:
-                  - name: prepare
-                    image: public.ecr.aws/docker/library/busybox:1.36
-                    command: ["sh", "-c", "mkdir -p /data/pgdata && chown -R 999:999 /data"]
-                    volumeMounts:
-                      - name: data
-                        mountPath: /data
-                containers:
-                  - name: postgres
-                    image: public.ecr.aws/docker/library/postgres:16
-                    ports:
-                      - containerPort: 5432
-                    env:
-                      - name: POSTGRES_USER
-                        valueFrom:
-                          secretKeyRef:
-                            name: postgres-auth
-                            key: username
-                      - name: POSTGRES_PASSWORD
-                        valueFrom:
-                          secretKeyRef:
-                            name: postgres-auth
-                            key: password
-                      - name: POSTGRES_DB
-                        valueFrom:
-                          secretKeyRef:
-                            name: postgres-auth
-                            key: database
-                      - name: PGDATA
-                        value: /var/lib/postgresql/data/pgdata
-                    readinessProbe:
-                      exec:
-                        command: ["pg_isready", "-U", "dbadmin", "-d", "cloudsentry"]
-                      initialDelaySeconds: 10
-                      periodSeconds: 10
-                    resources:
-                      requests:
-                        cpu: 250m
-                        memory: 512Mi
-                      limits:
-                        memory: 1536Mi
-                    volumeMounts:
-                      - name: data
-                        mountPath: /var/lib/postgresql/data
-                volumes:
-                  - name: data
-                    hostPath:
-                      path: /var/lib/spendsmart/postgres
-                      type: DirectoryOrCreate
-          ---
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: postgres
-            namespace: databases
-          spec:
-            selector:
-              app: postgres
-            ports:
-              - port: 5432
-                targetPort: 5432
-          ---
-          apiVersion: apps/v1
-          kind: StatefulSet
-          metadata:
-            name: clickhouse
-            namespace: databases
-          spec:
-            serviceName: clickhouse
-            replicas: 1
-            selector:
-              matchLabels:
-                app: clickhouse
-            template:
-              metadata:
-                labels:
-                  app: clickhouse
-              spec:
-                nodeSelector:
-                  spendsmart.io/workload: database
-                tolerations:
-                  - key: spendsmart.io/role
-                    operator: Equal
-                    value: data
-                    effect: NoSchedule
-                initContainers:
-                  - name: prepare
-                    image: public.ecr.aws/docker/library/busybox:1.36
-                    command: ["sh", "-c", "mkdir -p /data && chown -R 101:101 /data"]
-                    volumeMounts:
-                      - name: data
-                        mountPath: /data
-                containers:
-                  - name: clickhouse
-                    image: clickhouse/clickhouse-server:24.8
-                    ports:
-                      - containerPort: 8123
-                      - containerPort: 9000
-                    env:
-                      - name: CLICKHOUSE_USER
-                        valueFrom:
-                          secretKeyRef:
-                            name: clickhouse-auth
-                            key: username
-                      - name: CLICKHOUSE_PASSWORD
-                        valueFrom:
-                          secretKeyRef:
-                            name: clickhouse-auth
-                            key: password
-                      - name: CLICKHOUSE_DB
-                        valueFrom:
-                          secretKeyRef:
-                            name: clickhouse-auth
-                            key: database
-                    readinessProbe:
-                      httpGet:
-                        path: /ping
-                        port: 8123
-                      initialDelaySeconds: 20
-                      periodSeconds: 10
-                    resources:
-                      requests:
-                        cpu: 500m
-                        memory: 1Gi
-                      limits:
-                        memory: 3Gi
-                    volumeMounts:
-                      - name: data
-                        mountPath: /var/lib/clickhouse
-                volumes:
-                  - name: data
-                    hostPath:
-                      path: /var/lib/spendsmart/clickhouse
-                      type: DirectoryOrCreate
-          ---
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: clickhouse
-            namespace: databases
-          spec:
-            selector:
-              app: clickhouse
-            ports:
-              - name: http
-                port: 8123
-                targetPort: 8123
-              - name: native
-                port: 9000
-                targetPort: 9000
-          """))
-          PY
-          kubectl apply -f /tmp/spendsmart-dbs.yaml
-          kubectl -n databases rollout status statefulset/postgres --timeout=900s
-          kubectl -n databases rollout status statefulset/clickhouse --timeout=900s
-          kubectl -n databases get pods -o wide
-
-          signal_cfn 0 "bastion cluster bootstrap complete"
+            [Install]
+            WantedBy=multi-user.target
+            UNIT
+              systemctl daemon-reload
+              systemctl enable --now spendsmart-cluster-bootstrap.service
+            fi
+          - BootstrapAssetsS3Uri: !Ref BootstrapAssetsS3Uri
+            RunBootstrapFlag: !If [RunClusterBootstrap, 'true', 'false']
+            EksRegion: !Ref EksRegion
+            EksClusterName: !Ref EksClusterName
+            PostgresSecretName: !Ref PostgresSecretName
+            ClickHouseSecretName: !Ref ClickHouseSecretName
+            BastionKubectlVersion: !Ref BastionKubectlVersion
       KeyName: !Ref Ec2KeyName
       SubnetId: !Ref PublicSubnetId
       SecurityGroupIds:
@@ -642,6 +286,7 @@ Resources:
           Value: dev
         - Key: ManagedBy
           Value: CFT
+
   BastionEip:
     Type: AWS::EC2::EIP
     Condition: CreateBastionEip
@@ -656,6 +301,7 @@ Resources:
           Value: dev
         - Key: ManagedBy
           Value: CFT
+
   BastionEipAssociation:
     Type: AWS::EC2::EIPAssociation
     Condition: CreateBastionEip
@@ -677,8 +323,7 @@ Outputs:
     Value: !If [CreateBastionEip, !Ref BastionEip, !GetAtt BastionInstance.PublicIp]
   BastionRoleArn:
     Condition: CreateBastion
-    Description: IAM role ARN used by the bastion
-    Value: !GetAtt BastionRole.Arn
+    Value: !Ref BastionRoleArn
   BastionRoleName:
     Condition: CreateBastion
-    Value: !Ref BastionRole
+    Value: !Ref BastionRoleName

@@ -42,6 +42,7 @@ Usually **`S3BucketName` (`athena-results-spendsmart-dev`) already exists** outs
 1. From the `CFT` directory, package `main.yml` and its nested templates to an S3 bucket in the target region:
 
    ```sh
+   bash scripts/sync-bastion-assets.sh <TEMPLATE_BUCKET> us-east-1
    aws cloudformation package \
      --template-file main.yml \
      --s3-bucket <TEMPLATE_BUCKET> \
@@ -185,7 +186,7 @@ The ALB DNS name appears in the Ingress `ADDRESS` field. The controller owns and
 | Controller reports `AccessDenied` | Pod Identity association or service-account settings do not match the Helm release. | Compare Helm namespace/service account with `AlbControllerNamespace` and `AlbControllerServiceAccountName`; inspect controller logs and association status. |
 | Ingress has no ALB address | Controller is not ready, Ingress class is wrong, subnet tags are missing, or AWS API egress is blocked. | Check controller deployment/events, `ingressClassName: alb`, public-subnet discovery tags, and node/pod egress through NAT or endpoints. |
 | ALB target health is unhealthy/503 | Backend Service ports, target type, health-check path, or pod reachability is wrong. | Check Service endpoints/ports and Ingress annotations; inspect controller logs and target health. |
-| `ClusterBootstrap` stuck; bastion log shows `curl-minimal` vs `curl` dnf conflict; `kubectl: command not found` | Bastion UserData used `dnf install curl` on Amazon Linux 2023. | Re-package and update the stack so `modules/bastion/template.yaml` is current (install only `aws-cfn-bootstrap` and `python3`). Replace the bastion instance if UserData did not re-run. On a running bastion, use `scripts/bastion-recover-bootstrap.sh` or install kubectl manually; signal `ClusterBootstrap` only after DB rollouts succeed. Log: `/var/log/spendsmart-cluster-bootstrap.log`. |
+| Bastion bootstrap / DB issues | Bootstrap runs via systemd (`spendsmart-cluster-bootstrap.service`); CloudFormation no longer waits on `ClusterBootstrap`. | Ensure `scripts/sync-bastion-assets.sh` ran before deploy. On bastion: `sudo tail -f /var/log/spendsmart-cluster-bootstrap.log` or `sudo bash scripts/bastion-recover-bootstrap.sh`. |
 | `kubectl get nodes` → `dial tcp 10.x.x.x:443: i/o timeout` from bastion | EKS API is private-only; bastion→cluster SG rules must exist **before** bootstrap. Older templates added those rules only after the bastion nested stack finished. | Update to current `bastion` template (ingress in nested stack) or manually allow TCP 443 from bastion SG to `EksClusterSecurityGroupId` (and 443/22 to nodes SG). Then retry `kubectl get nodes`. |
 
 ## Delete and Cost Cleanup

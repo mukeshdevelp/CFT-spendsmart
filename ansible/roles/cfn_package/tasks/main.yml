@@ -1,0 +1,28 @@
+---
+- name: Package CloudFormation template
+  ansible.builtin.command:
+    argv:
+      - aws
+      - cloudformation
+      - package
+      - --template-file
+      - "{{ repo_root }}/{{ cfn_template_file }}"
+      - --s3-bucket
+      - "{{ cfn_template_bucket }}"
+      - --output-template-file
+      - "{{ repo_root }}/{{ cfn_output_file }}"
+      - --region
+      - "{{ aws_region }}"
+  changed_when: true
+
+- name: Validate packaged template
+  ansible.builtin.command:
+    argv:
+      - aws
+      - cloudformation
+      - validate-template
+      - --template-body
+      - "file://{{ repo_root }}/{{ cfn_output_file }}"
+      - --region
+      - "{{ aws_region }}"
+  changed_when: false

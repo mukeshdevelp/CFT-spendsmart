@@ -1,0 +1,9 @@
+---
+- name: Wait for Helm CloudFormation stack
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: cfn_wait
+      vars:
+        target_stack_name: "{{ helm_stack_name }}"
+        change_type_file: "{{ helm_change_type_file }}"

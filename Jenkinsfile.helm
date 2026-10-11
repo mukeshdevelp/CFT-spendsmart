@@ -11,12 +11,12 @@ pipeline {
     choice(
       name: 'AWS_REGION',
       choices: ['us-east-1', 'ap-south-1'],
-      description: 'Region where infra and Helm stacks run'
+      description: 'AWS region (use us-east-1 for CUR)'
     )
     string(
-      name: 'INFRA_STACK_NAME',
+      name: 'CFN_STACK_NAME',
       defaultValue: 'spendsmart-dev',
-      description: 'Existing main.yml stack name (outputs supply cluster/VPC/ALB)'
+      description: 'CloudFormation root stack (main.yml)'
     )
     string(
       name: 'HELM_STACK_NAME',
@@ -26,39 +26,117 @@ pipeline {
     string(
       name: 'CFN_TEMPLATE_BUCKET',
       defaultValue: '',
-      description: 'S3 bucket for packaged nested templates'
+      description: 'S3 bucket for packaged templates and bastion-assets (required)'
+    )
+    string(
+      name: 'S3_BUCKET_NAME',
+      defaultValue: 'athena-results-spendsmart-dev',
+      description: 'Data/CUR S3 bucket parameter for main.yml'
+    )
+    string(
+      name: 'EXISTING_EC2_KEY_NAME',
+      defaultValue: 'mukesh',
+      description: 'EC2 key pair in region'
+    )
+    string(
+      name: 'BASTION_SSH_CIDRS',
+      defaultValue: '0.0.0.0/0',
+      description: 'Bastion SSH CIDR list'
     )
     string(
       name: 'NAME_PREFIX',
       defaultValue: 'spendsmart-dev',
-      description: 'NamePrefix / Secrets Manager path prefix'
+      description: 'NamePrefix for Secrets Manager paths and Helm'
     )
     string(
       name: 'SPENDSMART_VALUES_S3_URI',
       defaultValue: '',
-      description: 'Optional Helm values URI. Empty + UPLOAD_CLIENT_VALUES uses s3://<bucket>/client-a-values.yaml'
+      description: 'Optional Helm values URI; empty uses s3://<bucket>/client-a-values.yaml when upload enabled'
+    )
+    booleanParam(
+      name: 'SKIP_INFRA_DEPLOY',
+      defaultValue: false,
+      description: 'Skip infra stages (secrets + Helm only)'
+    )
+    booleanParam(
+      name: 'WAIT_FOR_INFRA',
+      defaultValue: true,
+      description: 'Wait for infra stack create/update'
+    )
+    booleanParam(
+      name: 'WAIT_FOR_HELM_STACK',
+      defaultValue: true,
+      description: 'Wait for Helm CloudFormation stack'
     )
     booleanParam(
       name: 'UPLOAD_CLIENT_VALUES',
       defaultValue: true,
-      description: 'Upload client-a-values.yaml to the template bucket'
+      description: 'Upload client-a-values.yaml to template bucket'
     )
     choice(
       name: 'INSTALL_ALB_CONTROLLER',
       choices: ['true', 'false'],
-      description: 'Install AWS Load Balancer Controller during Helm deploy'
+      description: 'Install AWS Load Balancer Controller in Helm stack'
     )
-    booleanParam(
-      name: 'WAIT_FOR_STACK',
-      defaultValue: true,
-      description: 'Wait for Helm stack create/update'
+    string(
+      name: 'HARBOR_DOCKER_SERVER',
+      defaultValue: 'harbor.ldc.opstree.dev',
+      description: 'Harbor registry host'
+    )
+    string(
+      name: 'HARBOR_DOCKER_USERNAME',
+      defaultValue: '',
+      description: 'Harbor user or robot name'
+    )
+    password(
+      name: 'HARBOR_DOCKER_PASSWORD',
+      defaultValue: '',
+      description: 'Harbor password or robot token'
+    )
+    password(
+      name: 'ENCRYPTION_KEY',
+      defaultValue: '',
+      description: 'Optional; Helm module may generate encryption-key if empty'
+    )
+    password(
+      name: 'GEMINI_API_KEY',
+      defaultValue: '',
+      description: 'Gemini API key (gemini-key secret)'
+    )
+    string(
+      name: 'BASE_URL',
+      defaultValue: '',
+      description: 'base-url secret value'
+    )
+    string(
+      name: 'AWS_ACCESS_KEY_ID',
+      defaultValue: '',
+      description: 'Optional aws-access secret'
+    )
+    password(
+      name: 'AWS_SECRET_ACCESS_KEY',
+      defaultValue: '',
+      description: 'Optional aws-access secret'
     )
   }
 
   environment {
     AWS_DEFAULT_REGION = "${params.AWS_REGION}"
-    PACKAGED_HELM_TEMPLATE = 'packaged-helm.yml'
-    HELM_PARAMETERS = 'jenkins-helm-parameters.json'
+    CFN_STACK_NAME = "${params.CFN_STACK_NAME}"
+    HELM_STACK_NAME = "${params.HELM_STACK_NAME}"
+    CFN_TEMPLATE_BUCKET = "${params.CFN_TEMPLATE_BUCKET}"
+    S3_BUCKET_NAME = "${params.S3_BUCKET_NAME}"
+    EXISTING_EC2_KEY_NAME = "${params.EXISTING_EC2_KEY_NAME}"
+    BASTION_SSH_CIDRS = "${params.BASTION_SSH_CIDRS}"
+    NAME_PREFIX = "${params.NAME_PREFIX}"
+    SPENDSMART_VALUES_S3_URI = "${params.SPENDSMART_VALUES_S3_URI}"
+    SKIP_INFRA_DEPLOY = "${params.SKIP_INFRA_DEPLOY}"
+    UPLOAD_CLIENT_VALUES = "${params.UPLOAD_CLIENT_VALUES}"
+    INSTALL_ALB_CONTROLLER = "${params.INSTALL_ALB_CONTROLLER}"
+    ANSIBLE_CONFIG = "${WORKSPACE}/ansible/ansible.cfg"
+    ANSIBLE_COLLECTIONS_PATH = "${WORKSPACE}/ansible/collections"
+    ANSIBLE_LOCAL_TMP = "${WORKSPACE}/.ansible/tmp"
+    RUNTIME_SECRETS_JSON = 'jenkins-runtime-secrets.json'
   }
 
   stages {
@@ -68,176 +146,113 @@ pipeline {
       }
     }
 
+    stage('Install Ansible collections') {
+      steps {
+        sh '''
+          ansible-galaxy collection install -r ansible/requirements.yml -p ansible/collections
+        '''
+      }
+    }
+
     stage('Preflight') {
       steps {
-        sh '''
-          set -euo pipefail
-          command -v aws >/dev/null
-          test -f helm-main.yml
-          if [ -z "${CFN_TEMPLATE_BUCKET}" ]; then
-            echo "CFN_TEMPLATE_BUCKET is required"
-            exit 1
-          fi
-          aws s3api head-bucket --bucket "${CFN_TEMPLATE_BUCKET}"
-          aws cloudformation describe-stacks \
-            --stack-name "${INFRA_STACK_NAME}" \
-            --region "${AWS_REGION}" \
-            --query 'Stacks[0].StackStatus' \
-            --output text
-        '''
+        sh 'ansible-playbook ansible/playbooks/preflight.yml'
       }
     }
 
-    stage('Upload Helm values') {
+    stage('Infra: prepare & package') {
       when {
-        expression { return params.UPLOAD_CLIENT_VALUES }
+        expression { return !params.SKIP_INFRA_DEPLOY }
       }
       steps {
-        sh '''
-          set -euo pipefail
-          test -f client-a-values.yaml
-          aws s3 cp client-a-values.yaml "s3://${CFN_TEMPLATE_BUCKET}/client-a-values.yaml"
-        '''
+        sh 'ansible-playbook ansible/playbooks/infra.yml'
       }
     }
 
-    stage('Resolve infra outputs') {
+    stage('Infra: deploy') {
+      when {
+        expression { return !params.SKIP_INFRA_DEPLOY }
+      }
       steps {
-        sh '''
-          set -euo pipefail
-          VALUES_URI="${SPENDSMART_VALUES_S3_URI}"
-          if [ -z "$VALUES_URI" ] && [ "${UPLOAD_CLIENT_VALUES}" = "true" ]; then
-            VALUES_URI="s3://${CFN_TEMPLATE_BUCKET}/client-a-values.yaml"
-          fi
-          export VALUES_URI
-          python3 <<PY
-          import json
-          import os
-          import subprocess
+        sh 'ansible-playbook ansible/playbooks/deploy_infra.yml'
+      }
+    }
 
-          region = os.environ["AWS_REGION"]
-          stack = os.environ["INFRA_STACK_NAME"]
-          out = subprocess.check_output(
-              [
-                  "aws", "cloudformation", "describe-stacks",
-                  "--stack-name", stack,
-                  "--region", region,
-                  "--query", "Stacks[0].Outputs",
-                  "--output", "json",
-              ],
-              text=True,
-          )
-          outputs = {o["OutputKey"]: o["OutputValue"] for o in json.loads(out)}
+    stage('Infra: wait') {
+      when {
+        allOf {
+          expression { return !params.SKIP_INFRA_DEPLOY }
+          expression { return params.WAIT_FOR_INFRA }
+        }
+      }
+      steps {
+        sh 'ansible-playbook ansible/playbooks/wait_infra.yml'
+      }
+    }
 
-          def require(key):
-              v = outputs.get(key)
-              if not v:
-                  raise SystemExit(f"Missing infra stack output: {key}")
-              return v
+    stage('Wait for EKS') {
+      steps {
+        sh 'ansible-playbook ansible/playbooks/wait_eks.yml'
+      }
+    }
 
-          params = [
-              {"ParameterKey": "NamePrefix", "ParameterValue": os.environ["NAME_PREFIX"]},
-              {"ParameterKey": "ClusterName", "ParameterValue": require("EksClusterName")},
-              {"ParameterKey": "ClusterSecurityGroupId", "ParameterValue": require("EksClusterSecurityGroupId")},
-              {"ParameterKey": "VpcId", "ParameterValue": require("VpcId")},
-              {"ParameterKey": "PrivateSubnetId", "ParameterValue": require("PrivateSubnet1Id")},
-              {"ParameterKey": "AlbDnsName", "ParameterValue": require("AlbDnsName")},
-              {"ParameterKey": "PostgresSecretName", "ParameterValue": f"{os.environ['NAME_PREFIX']}/postgres"},
-              {"ParameterKey": "ClickHouseSecretName", "ParameterValue": f"{os.environ['NAME_PREFIX']}/clickhouse"},
-              {"ParameterKey": "SpendSmartValuesS3Uri", "ParameterValue": os.environ.get("VALUES_URI", "")},
-              {"ParameterKey": "InstallAlbController", "ParameterValue": os.environ["INSTALL_ALB_CONTROLLER"]},
+    stage('Bastion assets (helm-only)') {
+      when {
+        expression { return params.SKIP_INFRA_DEPLOY }
+      }
+      steps {
+        sh 'ansible-playbook ansible/playbooks/sync_bastion_assets.yml'
+      }
+    }
+
+    stage('Apply Kubernetes secrets') {
+      steps {
+        script {
+          def secrets = [
+            harbor_docker_server: params.HARBOR_DOCKER_SERVER,
+            harbor_docker_username: params.HARBOR_DOCKER_USERNAME,
+            harbor_docker_password: params.HARBOR_DOCKER_PASSWORD,
+            encryption_key: params.ENCRYPTION_KEY,
+            gemini_api_key: params.GEMINI_API_KEY,
+            base_url: params.BASE_URL,
+            aws_access_key_id: params.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key: params.AWS_SECRET_ACCESS_KEY,
           ]
-          Path = __import__("pathlib").Path
-          Path(os.environ["HELM_PARAMETERS"]).write_text(json.dumps(params, indent=2) + "\\n")
-          PY
-          cat "${HELM_PARAMETERS}"
-        '''
+          writeJSON file: env.RUNTIME_SECRETS_JSON, json: secrets
+        }
+        sh 'ansible-playbook ansible/playbooks/secrets.yml'
+      }
+      post {
+        always {
+          sh 'rm -f "${RUNTIME_SECRETS_JSON}"'
+        }
       }
     }
 
-    stage('Package Helm template') {
-      steps {
-        sh '''
-          set -euo pipefail
-          aws cloudformation package \
-            --template-file helm-main.yml \
-            --s3-bucket "${CFN_TEMPLATE_BUCKET}" \
-            --output-template-file "${PACKAGED_HELM_TEMPLATE}" \
-            --region "${AWS_REGION}"
-        '''
-      }
-    }
-
-    stage('Validate') {
-      steps {
-        sh '''
-          set -euo pipefail
-          aws cloudformation validate-template \
-            --template-body file://"${PACKAGED_HELM_TEMPLATE}" \
-            --region "${AWS_REGION}"
-        '''
-      }
-    }
-
-    stage('Deploy Helm stack') {
-      steps {
-        sh '''
-          set -euo pipefail
-          if aws cloudformation describe-stacks \
-            --stack-name "${HELM_STACK_NAME}" \
-            --region "${AWS_REGION}" >/dev/null 2>&1; then
-            CHANGE_SET_TYPE=UPDATE
-            aws cloudformation update-stack \
-              --stack-name "${HELM_STACK_NAME}" \
-              --template-body file://"${PACKAGED_HELM_TEMPLATE}" \
-              --parameters file://"${HELM_PARAMETERS}" \
-              --capabilities CAPABILITY_NAMED_IAM \
-              --region "${AWS_REGION}"
-          else
-            CHANGE_SET_TYPE=CREATE
-            aws cloudformation create-stack \
-              --stack-name "${HELM_STACK_NAME}" \
-              --template-body file://"${PACKAGED_HELM_TEMPLATE}" \
-              --parameters file://"${HELM_PARAMETERS}" \
-              --capabilities CAPABILITY_NAMED_IAM \
-              --region "${AWS_REGION}"
-          fi
-          echo "${CHANGE_SET_TYPE}" > .helm-cfn-change-type
-        '''
-      }
-    }
-
-    stage('Wait for Helm stack') {
+    stage('Helm: upload values') {
       when {
-        expression { return params.WAIT_FOR_STACK }
+        allOf {
+          expression { return params.SKIP_INFRA_DEPLOY }
+          expression { return params.UPLOAD_CLIENT_VALUES }
+        }
       }
       steps {
-        sh '''
-          set -euo pipefail
-          CHANGE_SET_TYPE=$(cat .helm-cfn-change-type)
-          if [ "$CHANGE_SET_TYPE" = "CREATE" ]; then
-            aws cloudformation wait stack-create-complete \
-              --stack-name "${HELM_STACK_NAME}" \
-              --region "${AWS_REGION}"
-          else
-            aws cloudformation wait stack-update-complete \
-              --stack-name "${HELM_STACK_NAME}" \
-              --region "${AWS_REGION}"
-          fi
-        '''
+        sh 'ansible-playbook ansible/playbooks/upload_values.yml'
       }
     }
 
-    stage('Helm stack outputs') {
+    stage('Helm: deploy') {
       steps {
-        sh '''
-          set -euo pipefail
-          aws cloudformation describe-stacks \
-            --stack-name "${HELM_STACK_NAME}" \
-            --region "${AWS_REGION}" \
-            --query 'Stacks[0].Outputs' \
-            --output table
-        '''
+        sh 'ansible-playbook ansible/playbooks/helm.yml'
+      }
+    }
+
+    stage('Helm: wait') {
+      when {
+        expression { return params.WAIT_FOR_HELM_STACK }
+      }
+      steps {
+        sh 'ansible-playbook ansible/playbooks/wait_helm.yml'
       }
     }
   }
@@ -246,11 +261,13 @@ pipeline {
     failure {
       sh '''
         set +e
-        aws cloudformation describe-stack-events \
-          --stack-name "${HELM_STACK_NAME}" \
-          --region "${AWS_REGION}" \
-          --max-items 20 \
-          --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[Timestamp,LogicalResourceId,ResourceStatusReason]' \
+        aws cloudformation describe-stack-events --stack-name "${CFN_STACK_NAME}" \
+          --region "${AWS_REGION}" --max-items 10 \
+          --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[LogicalResourceId,ResourceStatusReason]' \
+          --output table
+        aws cloudformation describe-stack-events --stack-name "${HELM_STACK_NAME}" \
+          --region "${AWS_REGION}" --max-items 10 \
+          --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[LogicalResourceId,ResourceStatusReason]' \
           --output table
       '''
     }

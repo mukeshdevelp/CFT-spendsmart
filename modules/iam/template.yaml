@@ -37,9 +37,32 @@ Parameters:
     Type: String
     Default: athena-results
 
-  # ALB
+  BastionEnabled:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+
+  PostgresSecretName:
+    Type: String
+    Default: spendsmart-dev/postgres
+
+  ClickHouseSecretName:
+    Type: String
+    Default: spendsmart-dev/clickhouse
+
+  CfnArtifactsBucketName:
+    Type: String
+    Default: ''
+    Description: S3 bucket holding packaged templates and bastion bootstrap assets.
+
 Conditions:
   UseDefaultAnalyticsPrincipal: !Equals [!Ref AnalyticsTrustedPrincipalArn, '']
+  CreateBastionRole: !Equals [!Ref BastionEnabled, 'true']
+  HasCfnArtifactsBucket: !Not [!Equals [!Ref CfnArtifactsBucketName, '']]
+  CreateBastionBootstrapS3Policy: !And
+    - !Condition CreateBastionRole
+    - !Condition HasCfnArtifactsBucket
+
 Resources:
   AnalyticsRole:
     Type: AWS::IAM::Role
@@ -197,6 +220,69 @@ Resources:
               - eks:DescribeFargateProfile
             Resource: '*'
 
+  BastionRole:
+    Type: AWS::IAM::Role
+    Condition: CreateBastionRole
+    Properties:
+      RoleName: !Sub '${NamePrefix}-bastion-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: BastionEksRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - eks:DescribeCluster
+                  - eks:ListClusters
+                  - eks:DescribeNodegroup
+                  - eks:ListNodegroups
+                Resource: '*'
+        - PolicyName: BastionDatabaseSecrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${PostgresSecretName}*'
+                  - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ClickHouseSecretName}*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-bastion-role'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CFT
+
+  BastionBootstrapAssetsPolicy:
+    Type: AWS::IAM::Policy
+    Condition: CreateBastionBootstrapS3Policy
+    Properties:
+      PolicyName: !Sub '${NamePrefix}-bastion-bootstrap-s3'
+      Roles:
+        - !Ref BastionRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:s3:::${CfnArtifactsBucketName}'
+              - !Sub 'arn:${AWS::Partition}:s3:::${CfnArtifactsBucketName}/bastion-assets/*'
+
 Outputs:
   AnalyticsIamRoleName:
     Value: !Ref AnalyticsRole
@@ -206,3 +292,9 @@ Outputs:
     Value: !Sub '${NamePrefix}${AnalyticsPolicyNameSuffix}'
   AnalyticsIamPolicyArn:
     Value: !Ref AnalyticsPolicy
+  BastionRoleArn:
+    Condition: CreateBastionRole
+    Value: !GetAtt BastionRole.Arn
+  BastionRoleName:
+    Condition: CreateBastionRole
+    Value: !Ref BastionRole

@@ -1,0 +1,12 @@
+---
+- name: Prepare and package infrastructure template
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: infra_params
+    - role: upload_client_values
+    - role: bastion_assets
+    - role: cfn_package
+      vars:
+        cfn_template_file: main.yml
+        cfn_output_file: "{{ packaged_infra }}"

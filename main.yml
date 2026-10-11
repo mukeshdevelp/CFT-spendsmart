@@ -73,6 +73,11 @@ Parameters:
     Default: ''
     Description: Optional S3 URI to client-a-values.yaml. When empty, values are generated from stack outputs.
 
+  CfnTemplateBucket:
+    Type: String
+    Default: spendsmart-cfn-packages
+    Description: S3 bucket for packaged nested templates and bastion bootstrap assets (bastion-assets/).
+
 Rules:
   ExistingEksInputsRequired:
     RuleCondition: !Equals [!Ref EksClusterMode, UseExisting]
@@ -132,6 +137,7 @@ Resources:
       - Network
       - Eks
       - Db
+      - Iam
     Properties:
       TemplateURL: ./modules/bastion/template.yaml
       Parameters:
@@ -147,6 +153,9 @@ Resources:
         ClickHouseSecretName: !Sub '${NamePrefix}/clickhouse'
         EksClusterSecurityGroupId: !GetAtt Eks.Outputs.EksClusterSecurityGroupId
         EksNodesSecurityGroupId: !GetAtt Eks.Outputs.EksNodesSecurityGroupId
+        BastionRoleName: !GetAtt Iam.Outputs.BastionRoleName
+        BastionRoleArn: !GetAtt Iam.Outputs.BastionRoleArn
+        BootstrapAssetsS3Uri: !Sub 's3://${CfnTemplateBucket}/bastion-assets'
 
   Eks:
     Type: AWS::CloudFormation::Stack
@@ -259,6 +268,10 @@ Resources:
         BucketArn: !GetAtt S3.Outputs.BucketArn
         CurPrefix: cur
         AthenaResultsPrefix: athena-results
+        BastionEnabled: !Ref BastionEnabled
+        PostgresSecretName: !Sub '${NamePrefix}/postgres'
+        ClickHouseSecretName: !Sub '${NamePrefix}/clickhouse'
+        CfnArtifactsBucketName: !Ref CfnTemplateBucket
 
 Outputs:
   Ec2KeyPairName:

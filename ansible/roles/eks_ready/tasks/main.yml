@@ -1,0 +1,39 @@
+---
+- name: Get infra stack outputs
+  amazon.aws.cloudformation_info:
+    stack_name: "{{ cfn_stack_name }}"
+    region: "{{ aws_region }}"
+  register: infra_stack
+
+- name: Resolve BastionInstanceId
+  ansible.builtin.set_fact:
+    bastion_instance_id: "{{ infra_stack.stacks[0].outputs | selectattr('output_key', 'equalto', 'BastionInstanceId') | map(attribute='output_value') | first | default('') }}"
+
+- name: Skip when no bastion
+  ansible.builtin.debug:
+    msg: No BastionInstanceId output; skipping EKS wait
+  when: bastion_instance_id | length == 0
+
+- name: Wait for enough EKS nodes via SSM
+  when: bastion_instance_id | length > 0
+  block:
+    - name: Poll node count on bastion
+      community.aws.ssm_run_command:
+        instance_ids:
+          - "{{ bastion_instance_id }}"
+        document_name: AWS-RunShellScript
+        parameters:
+          commands:
+            - "export KUBECONFIG={{ kubeconfig_bastion_path }}"
+            - kubectl get nodes --no-headers 2>/dev/null | wc -l
+        region: "{{ aws_region }}"
+        wait: true
+      register: ssm_nodes
+      until: (ssm_nodes.stdout | default([]) | join('') | trim | int) >= (min_eks_nodes | int)
+      retries: 60
+      delay: 20
+      failed_when: false
+
+    - name: Report node count
+      ansible.builtin.debug:
+        msg: "EKS nodes reported: {{ ssm_nodes.stdout | default('unknown') | trim }}"

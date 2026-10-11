@@ -1,0 +1,38 @@
+---
+- name: Check if stack exists
+  amazon.aws.cloudformation_info:
+    stack_name: "{{ target_stack_name }}"
+    region: "{{ aws_region }}"
+  register: stack_before
+  failed_when: false
+
+- name: Record change type
+  ansible.builtin.copy:
+    content: "{{ 'UPDATE' if stack_before.stacks | default([]) | length > 0 else 'CREATE' }}\n"
+    dest: "{{ repo_root }}/{{ change_type_file }}"
+    mode: "0644"
+
+- name: Load stack parameters JSON
+  ansible.builtin.set_fact:
+    cfn_param_list: "{{ lookup('file', repo_root + '/' + parameters_file) | from_json }}"
+
+- name: Build parameters dict for CloudFormation module
+  ansible.builtin.set_fact:
+    cfn_parameters_dict: "{{ cfn_parameters_dict | default({}) | combine({item.ParameterKey: item.ParameterValue}) }}"
+  loop: "{{ cfn_param_list }}"
+
+- name: Read packaged template body
+  ansible.builtin.slurp:
+    src: "{{ repo_root }}/{{ template_file }}"
+  register: packaged_template
+
+- name: Create or update CloudFormation stack
+  amazon.aws.cloudformation:
+    stack_name: "{{ target_stack_name }}"
+    state: present
+    region: "{{ aws_region }}"
+    template_body: "{{ packaged_template.content | b64decode }}"
+    capabilities:
+      - CAPABILITY_NAMED_IAM
+    parameters: "{{ cfn_parameters_dict }}"
+  register: cfn_deploy_result

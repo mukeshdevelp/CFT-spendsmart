@@ -11,15 +11,17 @@ The AWS Load Balancer Controller owns the application ALB and target group. It r
 | Template | Resources |
 | --- | --- |
 | `modules/network-skeleton/template.yaml` | VPC, subnets, internet gateway, routes, one NAT gateway/EIP |
-| `modules/bastion/template.yaml` | Optional bastion security group, EC2 instance, and EIP |
+| `modules/bastion/template.yaml` | Bastion SG, EKS access entry, EC2, EIP; downloads bootstrap assets from S3 |
+| `modules/bastion/scripts/cluster-bootstrap.sh` | kubectl setup, node labels, DB install (systemd on bastion) |
+| `modules/bastion/manifests/databases.yaml` | In-cluster Postgres and ClickHouse |
 | `modules/eks/template.yaml` | EKS cluster, multi-AZ node groups, IAM roles, node security group, add-ons, and controller identity |
 | `modules/alb/template.yaml` | alb creation, target group creation and attachment of target group |
-| `modules/db/template.yaml` | PostgreSQL and ClickHouse StatefulSets pinned to EKS node group 2, plus Secrets Manager credentials |
+| `modules/db/template.yaml` | Secrets Manager credentials for in-cluster databases |
 | `modules/spendsmart/template.yaml` | Optional private deployment host, EKS deployment access, Helm releases, and frontend Ingress |
 | `modules/s3/template.yaml` | Data and Athena-results bucket |
 | `modules/glue/template.yaml` | Glue database and service role |
 | `modules/athena/template.yaml` | Athena workgroup |
-| `modules/iam/template.yaml` | Analytics role and policy |
+| `modules/iam/template.yaml` | Analytics role/policy and bastion EC2 role |
 
 `main.yml` is the deployment entrypoint. Run `aws cloudformation package` to upload the child templates and generate the deployable parent template.
 
@@ -51,7 +53,7 @@ flowchart TB
 ### CloudFormation-managed resources
 
 - Network: VPC, two public and two private subnets, internet gateway, public routing, one NAT gateway/EIP, and shared private routing.
-- Access: optional bastion security group, EC2 instance, and optional Elastic IP.
+- Access: optional bastion (IAM role in `modules/iam`), security group, EKS access entry, EC2, optional EIP. Bootstrap is async (no CloudFormation WaitCondition).
 - EKS: cluster, cluster/node roles, worker security group, two managed node groups eligible in both private subnets, and the `vpc-cni`, `kube-proxy`, `coredns`, and `eks-pod-identity-agent` add-ons.
 - Controller identity: IAM role with the AWS Load Balancer Controller permissions policy and an EKS Pod Identity association for the configured Kubernetes namespace/service account.
 - Optional application install: private Helm deployment host and an EKS access entry used to install the controller, application chart, and Ingress.

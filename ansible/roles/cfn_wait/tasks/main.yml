@@ -1,0 +1,33 @@
+---
+- name: Read stack change type
+  ansible.builtin.slurp:
+    src: "{{ repo_root }}/{{ change_type_file }}"
+  register: change_type_slurp
+
+- name: Set expected waiter status
+  ansible.builtin.set_fact:
+    cfn_change_type: "{{ (change_type_slurp.content | b64decode).strip() }}"
+
+- name: Wait for stack create complete
+  amazon.aws.cloudformation_info:
+    stack_name: "{{ target_stack_name }}"
+    region: "{{ aws_region }}"
+  register: stack_info
+  until: stack_info.stacks[0].stack_status in ['CREATE_COMPLETE', 'UPDATE_COMPLETE']
+  retries: 120
+  delay: 30
+  when: cfn_change_type == 'CREATE'
+
+- name: Wait for stack update complete
+  amazon.aws.cloudformation_info:
+    stack_name: "{{ target_stack_name }}"
+    region: "{{ aws_region }}"
+  register: stack_info
+  until: stack_info.stacks[0].stack_status in ['UPDATE_COMPLETE', 'CREATE_COMPLETE']
+  retries: 120
+  delay: 30
+  when: cfn_change_type == 'UPDATE'
+
+- name: Show final stack status
+  ansible.builtin.debug:
+    msg: "{{ stack_info.stacks[0].stack_status }}"

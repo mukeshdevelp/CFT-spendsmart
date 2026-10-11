@@ -1,0 +1,16 @@
+---
+- name: Package and deploy Helm CloudFormation stack
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: helm_params
+    - role: cfn_package
+      vars:
+        cfn_template_file: helm-main.yml
+        cfn_output_file: "{{ packaged_helm }}"
+    - role: cfn_stack
+      vars:
+        target_stack_name: "{{ helm_stack_name }}"
+        template_file: "{{ packaged_helm }}"
+        parameters_file: "{{ helm_parameters_file }}"
+        change_type_file: "{{ helm_change_type_file }}"

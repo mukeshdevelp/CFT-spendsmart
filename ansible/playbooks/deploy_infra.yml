@@ -1,0 +1,11 @@
+---
+- name: Deploy infrastructure CloudFormation stack
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: cfn_stack
+      vars:
+        target_stack_name: "{{ cfn_stack_name }}"
+        template_file: "{{ packaged_infra }}"
+        parameters_file: "{{ deploy_parameters_file }}"
+        change_type_file: "{{ infra_change_type_file }}"

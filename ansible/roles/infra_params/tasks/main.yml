@@ -1,0 +1,38 @@
+---
+- name: Load base CloudFormation parameters
+  ansible.builtin.set_fact:
+    base_cfn_parameters: "{{ lookup('file', repo_root + '/parameters.json') | from_json }}"
+
+- name: Merge Jenkins infra parameter overrides
+  ansible.builtin.set_fact:
+    merged_cfn_parameters: >-
+      {{
+        base_cfn_parameters
+        | rejectattr('ParameterKey', 'in', override_keys)
+        | list
+        + override_entries
+      }}
+  vars:
+    override_keys:
+      - ExistingEc2KeyName
+      - BastionSshCidrs
+      - S3BucketName
+      - SpendSmartWorkloadMode
+      - CfnTemplateBucket
+    override_entries:
+      - ParameterKey: ExistingEc2KeyName
+        ParameterValue: "{{ existing_ec2_key_name }}"
+      - ParameterKey: BastionSshCidrs
+        ParameterValue: "{{ bastion_ssh_cidrs }}"
+      - ParameterKey: S3BucketName
+        ParameterValue: "{{ s3_bucket_name }}"
+      - ParameterKey: SpendSmartWorkloadMode
+        ParameterValue: LeaveExisting
+      - ParameterKey: CfnTemplateBucket
+        ParameterValue: "{{ cfn_template_bucket }}"
+
+- name: Write jenkins-parameters.json
+  ansible.builtin.copy:
+    content: "{{ merged_cfn_parameters | to_nice_json }}\n"
+    dest: "{{ repo_root }}/{{ deploy_parameters_file }}"
+    mode: "0644"

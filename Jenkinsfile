@@ -138,6 +138,15 @@ pipeline {
       }
     }
 
+    stage('Upload bastion bootstrap assets') {
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/sync-bastion-assets.sh "${CFN_TEMPLATE_BUCKET}" "${AWS_REGION}"
+        '''
+      }
+    }
+
     stage('Package templates') {
       steps {
         sh '''

@@ -7,7 +7,8 @@ For deployment commands and troubleshooting, see [ONE_CLICK_DEPLOYMENT.md](ONE_C
 ## What It Creates
 
 - VPC, two public subnets, two private subnets in distinct AZs, internet gateway, and one NAT gateway/EIP when enabled.
-- Bastion host with kubectl. SSH in and run `kubectl get nodes` and `kubectl get pods -A`.
+- Bastion host (SSH/SSM). Cluster bootstrap (kubectl, node labels, in-cluster Postgres/ClickHouse) runs in the background via `spendsmart-cluster-bootstrap.service`; it does not block CloudFormation.
+- Bastion IAM lives in `modules/iam`. Bootstrap script and DB manifests live under `modules/bastion/scripts` and `modules/bastion/manifests` and are published to `s3://<CfnTemplateBucket>/bastion-assets/` before deploy (`scripts/sync-bastion-assets.sh`).
 - Private EKS cluster and two managed node groups. Node group 2 is the data node (`c7i-flex.xlarge`, 100 GB) and runs PostgreSQL and ClickHouse as in-cluster StatefulSets.
 - PostgreSQL service `postgres.databases.svc.cluster.local:5432` and ClickHouse service `clickhouse.databases.svc.cluster.local` on ports 8123 and 9000.
 
@@ -31,7 +32,7 @@ The AWS Load Balancer Controller creates the application ALB and target group fr
 
 `SpendSmartWorkloadMode` defaults to `LeaveExisting` so `main.yml` deploys infrastructure only (no circular dependency with bastion bootstrap). Install the Helm chart with a **second** pipeline or stack:
 
-1. **Jenkins:** run the job defined in `Jenkinsfile.helm` after the infra stack is `CREATE_COMPLETE`. It reads outputs from `INFRA_STACK_NAME` and deploys `helm-main.yml` as `spendsmart-dev-helm` (configurable).
+1. **Jenkins:** run the job defined in `Jenkinsfile.helm` for the full flow (infra via `main.yml`, runtime K8s secrets, then `helm-main.yml`) using playbooks under `ansible/`. See `ansible/README.md`.
 2. **CLI:** package `helm-main.yml`, pass `ClusterName`, `VpcId`, `AlbDnsName`, and other parameters from `aws cloudformation describe-stacks` on the infra stack.
 
 To install the chart inside the same root stack instead, set `SpendSmartWorkloadMode=InstallNew` on create or update.
@@ -58,6 +59,8 @@ Optional environment-specific, non-secret chart overrides can be downloaded from
 From this directory, replace `<TEMPLATE_BUCKET>` with an existing bucket in the target account and region:
 
 ```sh
+bash scripts/sync-bastion-assets.sh <TEMPLATE_BUCKET> us-east-1
+
 aws cloudformation package \
   --template-file main.yml \
   --s3-bucket <TEMPLATE_BUCKET> \

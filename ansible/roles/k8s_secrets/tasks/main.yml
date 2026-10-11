@@ -1,0 +1,97 @@
+---
+- name: Load runtime secrets from Jenkins JSON
+  ansible.builtin.set_fact:
+    runtime_secrets: "{{ lookup('file', runtime_secrets_json_path) | from_json }}"
+
+- name: Map secret fields
+  ansible.builtin.set_fact:
+    harbor_docker_server: "{{ runtime_secrets.harbor_docker_server | default('harbor.ldc.opstree.dev') }}"
+    harbor_docker_username: "{{ runtime_secrets.harbor_docker_username | default('') }}"
+    harbor_docker_password: "{{ runtime_secrets.harbor_docker_password | default('') }}"
+    encryption_key: "{{ runtime_secrets.encryption_key | default('') }}"
+    gemini_api_key: "{{ runtime_secrets.gemini_api_key | default('') }}"
+    base_url: "{{ runtime_secrets.base_url | default('') }}"
+    aws_access_key_id: "{{ runtime_secrets.aws_access_key_id | default('') }}"
+    aws_secret_access_key: "{{ runtime_secrets.aws_secret_access_key | default('') }}"
+
+- name: Build Docker auth JSON for Harbor
+  ansible.builtin.set_fact:
+    docker_auth_json:
+      auths:
+        "{{ harbor_docker_server }}":
+          username: "{{ harbor_docker_username }}"
+          password: "{{ harbor_docker_password }}"
+          auth: "{{ (harbor_docker_username + ':' + harbor_docker_password) | b64encode }}"
+  when: harbor_docker_username | length > 0 and harbor_docker_password | length > 0
+  no_log: true
+
+- name: Get bastion instance id
+  amazon.aws.cloudformation_info:
+    stack_name: "{{ cfn_stack_name }}"
+    region: "{{ aws_region }}"
+  register: infra_stack
+
+- name: Set bastion id
+  ansible.builtin.set_fact:
+    bastion_instance_id: "{{ infra_stack.stacks[0].outputs | selectattr('output_key', 'equalto', 'BastionInstanceId') | map(attribute='output_value') | first }}"
+
+- name: Require bastion for secrets
+  ansible.builtin.assert:
+    that:
+      - bastion_instance_id | length > 0
+    fail_msg: BastionInstanceId missing from infra stack
+
+- name: Render Kubernetes secrets manifest
+  ansible.builtin.template:
+    src: app-secrets.yaml.j2
+    dest: "{{ repo_root }}/.jenkins-k8s-secrets.yaml"
+    mode: "0600"
+  no_log: true
+
+- name: Set S3 object key for secrets manifest
+  ansible.builtin.set_fact:
+    secrets_s3_key: "bastion-assets/jenkins-secrets-{{ build_number }}.yaml"
+
+- name: Upload secrets manifest to S3
+  amazon.aws.s3_object:
+    bucket: "{{ cfn_template_bucket }}"
+    object: "{{ secrets_s3_key }}"
+    src: "{{ repo_root }}/.jenkins-k8s-secrets.yaml"
+    mode: put
+    encrypt: true
+    region: "{{ aws_region }}"
+  no_log: true
+
+- name: Apply secrets on bastion via SSM
+  community.aws.ssm_run_command:
+    instance_ids:
+      - "{{ bastion_instance_id }}"
+    document_name: AWS-RunShellScript
+    region: "{{ aws_region }}"
+    wait: true
+    parameters:
+      commands:
+        - "set -euo pipefail"
+        - "export KUBECONFIG={{ kubeconfig_bastion_path }}"
+        - "aws s3 cp s3://{{ cfn_template_bucket }}/{{ secrets_s3_key }} /tmp/jenkins-k8s-secrets.yaml"
+        - kubectl apply -f /tmp/jenkins-k8s-secrets.yaml
+        - kubectl get secrets -n {{ k8s_namespace }}
+        - rm -f /tmp/jenkins-k8s-secrets.yaml
+  register: ssm_apply
+  no_log: true
+
+- name: Remove temporary secrets manifest from S3
+  amazon.aws.s3_object:
+    bucket: "{{ cfn_template_bucket }}"
+    object: "{{ secrets_s3_key }}"
+    mode: delobj
+    region: "{{ aws_region }}"
+
+- name: Remove local secrets manifest
+  ansible.builtin.file:
+    path: "{{ repo_root }}/.jenkins-k8s-secrets.yaml"
+    state: absent
+
+- name: SSM apply output
+  ansible.builtin.debug:
+    msg: "{{ ssm_apply.stdout | default([]) }}"
