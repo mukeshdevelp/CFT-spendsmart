@@ -32,8 +32,13 @@ harbor_docker_password: ""
 
 encryption_key: ""
 
-# Optional later: set true to fill VITE_API_BASE_URL from stack AlbDnsName
-inject_cfn_urls: false
+# Set VITE_API_BASE_URL to http://<AlbDnsName> (ALB listener port 80); frontend NodePort 30080 for TG
+inject_cfn_urls: true
+alb_listener_port: 80
+alb_target_port: 30080
+patch_frontend_nodeport: true
+keycloak_realm: spendsmart
+keycloak_client_id: spendsmart-frontend
 keycloak_browser_url: ""
 cloudsentry_url: ""
 

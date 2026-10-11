@@ -51,6 +51,10 @@
     timeout: "{{ helm_timeout }}"
     atomic: "{{ helm_wait | bool }}"
 
+- name: Patch frontend NodePort for infra ALB (chart Service template has no nodePort field)
+  ansible.builtin.import_tasks: patch_frontend_nodeport.yml
+  when: patch_frontend_nodeport | default(true) | bool
+
 - name: Show workloads in namespace
   ansible.builtin.command:
     cmd: kubectl get deploy,svc,pods,cronjob -n {{ k8s_namespace }}

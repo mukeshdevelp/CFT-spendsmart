@@ -100,8 +100,18 @@ pipeline {
     )
     booleanParam(
       name: 'INJECT_CFN_URLS',
-      defaultValue: false,
-      description: 'If true, fill VITE URLs from stack AlbDnsName; false = client-a-values.yaml as in local guide step 16'
+      defaultValue: true,
+      description: 'Set VITE_API_BASE_URL to http://<AlbDnsName> (listener port 80) and NodePort 30080 for ALB'
+    )
+    string(
+      name: 'ALB_LISTENER_PORT',
+      defaultValue: '80',
+      description: 'Public ALB HTTP port (browser / VITE URLs); matches main.yml AlbListenerPort'
+    )
+    string(
+      name: 'ALB_TARGET_PORT',
+      defaultValue: '30080',
+      description: 'Frontend Service nodePort for ALB target group; matches main.yml AlbTargetPort'
     )
     string(
       name: 'CREDENTIAL_AWS',
@@ -183,6 +193,8 @@ pipeline {
     HELM_TIMEOUT = "${params.HELM_TIMEOUT}"
     CLICKHOUSE_TABLE = "${params.CLICKHOUSE_TABLE}"
     KEYCLOAK_IMAGE = "${params.KEYCLOAK_IMAGE}"
+    ALB_LISTENER_PORT = "${params.ALB_LISTENER_PORT}"
+    ALB_TARGET_PORT = "${params.ALB_TARGET_PORT}"
     RUNTIME_SECRETS_JSON = 'jenkins-runtime-secrets.json'
     HELM_VALUES_RENDERED = 'helm-values-rendered.yaml'
   }
@@ -282,6 +294,8 @@ pipeline {
               export KEYCLOAK_REALM="${KEYCLOAK_REALM}"
               export KEYCLOAK_CLIENT_ID="${KEYCLOAK_CLIENT_ID}"
               export KEYCLOAK_BROWSER_URL="${KEYCLOAK_BROWSER_URL}"
+              export ALB_LISTENER_PORT="${ALB_LISTENER_PORT}"
+              export ALB_TARGET_PORT="${ALB_TARGET_PORT}"
               python3 scripts/prepare-helm-values.py \
                 --base-values client-a-values.yaml \
                 --out "${HELM_VALUES_RENDERED}" \
@@ -289,14 +303,23 @@ pipeline {
                 --namespace "${K8S_NAMESPACE}" \
                 --stack-name "${CFN_STACK_NAME}" \
                 --region "${AWS_REGION}" \
-                --keycloak-url "${KEYCLOAK_URL}"
+                --keycloak-url "${KEYCLOAK_URL}" \
+                --alb-listener-port "${ALB_LISTENER_PORT}" \
+                --alb-target-port "${ALB_TARGET_PORT}" \
+                --inject-urls
               '''
             }
           } else {
             sh '''
             set -eu
             cp client-a-values.yaml "${HELM_VALUES_RENDERED}"
-            echo "export FRONTEND_BASE_URL=" > "${HELM_DEPLOY_CONTEXT}"
+            printf '%s\n' \
+              "export FRONTEND_BASE_URL=" \
+              "export FRONTEND_PUBLIC_URL=" \
+              "export ALB_DNS_NAME=" \
+              "export ALB_LISTENER_PORT=${ALB_LISTENER_PORT}" \
+              "export ALB_TARGET_PORT=${ALB_TARGET_PORT}" \
+              > "${HELM_DEPLOY_CONTEXT}"
             '''
           }
         }
@@ -386,7 +409,7 @@ pipeline {
                 \"chmod +x /tmp/bastion-apply-chart-secrets.sh /tmp/bastion-helm-install.sh /tmp/bastion-deploy-keycloak.sh /tmp/bastion-configure-keycloak-realm.sh\",
                 \"sudo -u ec2-user KUBECONFIG=/home/ec2-user/.kube/config /tmp/bastion-apply-chart-secrets.sh /tmp/jenkins-secrets.json\",
                 \"if [ \\\"${DEPLOY_KC}\\\" = \\\"true\\\" ]; then set -a; . /tmp/helm-deploy-context.env; set +a; sudo -u ec2-user KUBECONFIG=/home/ec2-user/.kube/config SECRETS_JSON=/tmp/jenkins-secrets.json CONFIGURE_REALM=${CONFIGURE_KC} KEYCLOAK_IMAGE=${KEYCLOAK_IMAGE} KEYCLOAK_REALM_SCRIPT=/tmp/bastion-configure-keycloak-realm.sh /tmp/bastion-deploy-keycloak.sh; fi\",
-                \"sudo -u ec2-user KUBECONFIG=/home/ec2-user/.kube/config VALUES_FILE=/tmp/helm-values-rendered.yaml CHART_REPO=${CHART_REPO} CHART_BRANCH=${CHART_BRANCH} RELEASE_NAME=${HELM_RELEASE} NAMESPACE=${K8S_NAMESPACE} HELM_TIMEOUT=${HELM_TIMEOUT} HELM_WAIT=${HELM_WAIT_ENV} /tmp/bastion-helm-install.sh\",
+                \"sudo -u ec2-user KUBECONFIG=/home/ec2-user/.kube/config DEPLOY_CONTEXT_FILE=/tmp/helm-deploy-context.env VALUES_FILE=/tmp/helm-values-rendered.yaml CHART_REPO=${CHART_REPO} CHART_BRANCH=${CHART_BRANCH} RELEASE_NAME=${HELM_RELEASE} NAMESPACE=${K8S_NAMESPACE} HELM_TIMEOUT=${HELM_TIMEOUT} HELM_WAIT=${HELM_WAIT_ENV} /tmp/bastion-helm-install.sh\",
                 \"rm -f /tmp/jenkins-secrets.json /tmp/helm-values-rendered.yaml /tmp/helm-deploy-context.env /tmp/bastion-apply-chart-secrets.sh /tmp/bastion-helm-install.sh /tmp/bastion-deploy-keycloak.sh /tmp/bastion-configure-keycloak-realm.sh\"
               ]" --region "${AWS_REGION}" --query Command.CommandId --output text)
             bash scripts/wait-ssm-command.sh "${CMD_ID}" "$BASTION_ID" "${AWS_REGION}"

@@ -28,36 +28,47 @@
         spendsmart_cfn_outputs: "{{ cfn_stack.cloudformation[cfn_stack_name].stack_outputs | default({}) }}"
         cacheable: true
 
-    - name: Read Helm values (client-a-values.yaml — guide step 16)
-      ansible.builtin.slurp:
-        src: "{{ client_values_file }}"
-      register: spendsmart_base_values
-
-    - name: Use values as-is (guide empty VITE_*)
-      ansible.builtin.set_fact:
-        spendsmart_helm_values_yaml: "{{ spendsmart_base_values.content | b64decode }}"
-        spendsmart_frontend_base_url: ""
-        cacheable: true
+    - name: Render Helm values (copy client-a-values only)
+      ansible.builtin.command:
+        cmd: cp {{ client_values_file }} {{ rendered_values_file }}
+      changed_when: true
       when: not (inject_cfn_urls | default(false) | bool)
 
-    - name: Optional inject API URL from AlbDnsName
+    - name: Render Helm values with ALB DNS (chart README + EKS ALB)
+      ansible.builtin.command:
+        cmd: >
+          python3 {{ playbook_dir }}/../../scripts/prepare-helm-values.py
+          --base-values {{ client_values_file }}
+          --out {{ rendered_values_file }}
+          --context-out /tmp/spendsmart-helm-deploy-context.env
+          --namespace {{ k8s_namespace }}
+          --stack-name {{ cfn_stack_name }}
+          --region {{ aws_region }}
+          --alb-listener-port {{ alb_listener_port }}
+          --alb-target-port {{ alb_target_port }}
+          --inject-urls
+      environment:
+        KEYCLOAK_REALM: "{{ keycloak_realm | default('spendsmart') }}"
+        KEYCLOAK_CLIENT_ID: "{{ keycloak_client_id | default('spendsmart-frontend') }}"
+        KEYCLOAK_BROWSER_URL: "{{ keycloak_browser_url | default('') }}"
+        CLOUDSENTRY_URL: "{{ cloudsentry_url | default('') }}"
       when: inject_cfn_urls | default(false) | bool
-      block:
-        - name: Resolve ALB DNS
-          ansible.builtin.set_fact:
-            spendsmart_frontend_base_url: >-
-              {{ 'http://' + spendsmart_cfn_outputs.get('AlbDnsName', '')
-                 if spendsmart_cfn_outputs.get('AlbDnsName', '') else '' }}
-            cacheable: true
 
-        - name: Patch VITE_API_BASE_URL in values YAML
-          ansible.builtin.set_fact:
-            spendsmart_helm_values_yaml: >-
-              {{
-                (spendsmart_base_values.content | b64decode)
-                | regex_replace('VITE_API_BASE_URL: ""', 'VITE_API_BASE_URL: "' + spendsmart_frontend_base_url + '"', 1)
-              }}
-            cacheable: true
+    - name: Load rendered values for bastion
+      ansible.builtin.slurp:
+        src: "{{ rendered_values_file }}"
+      register: spendsmart_rendered_values
+
+    - name: Cache Helm values and frontend URL for bastion
+      ansible.builtin.set_fact:
+        spendsmart_helm_values_yaml: "{{ spendsmart_rendered_values.content | b64decode }}"
+        spendsmart_frontend_base_url: >-
+          {{
+            ('http://' + spendsmart_cfn_outputs.get('AlbDnsName', ''))
+            if (inject_cfn_urls | default(false) | bool and spendsmart_cfn_outputs.get('AlbDnsName', ''))
+            else ''
+          }}
+        cacheable: true
 
 - name: Deploy SpendSmart on bastion (kubectl / Helm)
   hosts: bastion

@@ -2,6 +2,13 @@
 # Run on bastion: helm upgrade --install spendsmart chart from GitHub branch.
 set -euo pipefail
 export KUBECONFIG="${KUBECONFIG:-/home/ec2-user/.kube/config}"
+DEPLOY_CONTEXT_FILE="${DEPLOY_CONTEXT_FILE:-/tmp/helm-deploy-context.env}"
+if [ -f "$DEPLOY_CONTEXT_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$DEPLOY_CONTEXT_FILE"
+  set +a
+fi
 
 VALUES_FILE="${VALUES_FILE:-/tmp/helm-values-rendered.yaml}"
 CHART_REPO="${CHART_REPO:-https://github.com/OT-CONTAINER-KIT/helm-charts.git}"
@@ -11,6 +18,32 @@ RELEASE_NAME="${RELEASE_NAME:-spendsmart}"
 NAMESPACE="${NAMESPACE:-spendsmart}"
 HELM_TIMEOUT="${HELM_TIMEOUT:-20m}"
 HELM_WAIT="${HELM_WAIT:-true}"
+ALB_TARGET_PORT="${ALB_TARGET_PORT:-30080}"
+PATCH_FRONTEND_NODEPORT="${PATCH_FRONTEND_NODEPORT:-true}"
+
+patch_frontend_nodeport() {
+  local svc="${RELEASE_NAME}-frontend"
+  if [ "$PATCH_FRONTEND_NODEPORT" != "true" ]; then
+    return 0
+  fi
+  if ! kubectl get svc "$svc" -n "$NAMESPACE" >/dev/null 2>&1; then
+    echo "Skip NodePort patch: Service $svc not found"
+    return 0
+  fi
+  echo "Patching $svc NodePort -> ${ALB_TARGET_PORT} (ALB target group port)"
+  kubectl patch svc "$svc" -n "$NAMESPACE" --type merge -p "{
+    \"spec\": {
+      \"type\": \"NodePort\",
+      \"ports\": [{
+        \"name\": \"http\",
+        \"port\": 80,
+        \"targetPort\": 80,
+        \"nodePort\": ${ALB_TARGET_PORT},
+        \"protocol\": \"TCP\"
+      }]
+    }
+  }"
+}
 
 command -v git >/dev/null || sudo dnf install -y git
 if ! command -v helm >/dev/null; then
@@ -38,5 +71,7 @@ if ! helm upgrade --install "$RELEASE_NAME" "$CHART_DIR" \
   kubectl get events -n "$NAMESPACE" --sort-by=.lastTimestamp | tail -30 || true
   exit 1
 fi
+
+patch_frontend_nodeport
 
 kubectl get deploy,svc,pods,cronjob -n "$NAMESPACE"

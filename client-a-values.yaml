@@ -1,6 +1,10 @@
-# SpendSmart Helm values (OT-CONTAINER-KIT chart). Matches local client-a-file.yml layout.
-# Images: harbor.ldc.opstree.dev — EKS pulls via harbor-ldc-coe-regcred (pipeline step 6).
-# Optional: set VITE_* URLs when Keycloak/ALB are ready; empty strings match local guide step 16.
+# SpendSmart Helm overrides (OT-CONTAINER-KIT charts/spendsmart).
+# Deploy: create K8s secrets (Harbor, encryption-key, clickhouse, clickhouse-db) then:
+#   helm upgrade --install spendsmart <chart> -n spendsmart -f client-a-values.yaml --wait
+# EKS: pipeline runs scripts/prepare-helm-values.py to set VITE_* to http://<AlbDnsName> (ALB port 80).
+
+imagePullSecrets:
+  - name: harbor-ldc-coe-regcred
 
 backend:
   image:
@@ -8,6 +12,7 @@ backend:
     tag: latest
   nodeSelector:
     spendsmart.io/workload: backend
+  annotations: {}
   resources:
     requests:
       cpu: 100m
@@ -24,12 +29,14 @@ frontend:
     spendsmart.io/workload: frontend
   service:
     type: NodePort
+    port: 80
+    targetPort: 80
   configMap:
     data:
       VITE_API_BASE_URL: ""
       VITE_CLOUD_SENTRY_API_BASE_URL: ""
-      VITE_KEYCLOAK_CLIENT_ID: ""
-      VITE_KEYCLOAK_REALM: ""
+      VITE_KEYCLOAK_CLIENT_ID: "spendsmart-frontend"
+      VITE_KEYCLOAK_REALM: "spendsmart"
       VITE_KEYCLOAK_URL: ""
   nginx:
     csp:
@@ -39,6 +46,7 @@ frontend:
       frameSrc:
         - "'self'"
         - "https:"
+  annotations: {}
 
 cloudsentry:
   enabled: false
@@ -51,3 +59,4 @@ engine:
   schedule: "5 11,23 * * *"
   nodeSelector:
     spendsmart.io/workload: backend
+  annotations: {}

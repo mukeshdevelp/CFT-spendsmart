@@ -14,8 +14,14 @@ This maps the [local SpendSmart deploy guide](https://github.com/mukeshdevelp/sp
 | 13 Secret `clickhouse-db` (6 keys) | Engine | Same |
 | 14 `encryption-key` | App team key | Jenkins `spendsmart-encryption-key` → `ENCRYPTION_KEY` |
 | 15 Verify secrets | 4 secrets | Same four names only |
-| 16 `client-a-values.yaml` | `client-a-file.yml` | Repo root `client-a-values.yaml` (Harbor images, `cloudsentry.enabled: false`, engine **dev** image) |
-| 17–19 `helm lint` / `template` / `upgrade --install` | Local chart path | Chart from GitHub `feature/spendsmart-helm-chart` |
+| 16 `client-a-values.yaml` | `client-a-file.yml` | Repo root `client-a-values.yaml` + `prepare-helm-values.py` when `INJECT_CFN_URLS=true` |
+| 17–19 `helm lint` / `template` / `upgrade --install` | Local chart path | OT-CONTAINER-KIT `charts/spendsmart` (see `vendor/helm-charts` after `scripts/fetch-helm-chart.sh`) |
+
+## Chart deploy order (from upstream README)
+
+1. Create namespace + secrets (`harbor-ldc-coe-regcred`, `encryption-key`, `clickhouse`, `clickhouse-db`) — **not** in the chart.
+2. `helm upgrade --install spendsmart ./charts/spendsmart -n spendsmart -f client-a-values.yaml --wait`
+3. EKS only: frontend `Service` → **NodePort `30080`** (ALB target group); browser URL **`http://<AlbDnsName>`** (ALB listener **80**). Pipeline sets `VITE_API_BASE_URL` to that URL when `INJECT_CFN_URLS=true`.
 
 ## Required Jenkins credentials (app job only)
 
