@@ -435,41 +435,41 @@ void withAwsCredentials(Closure body) {
   }
 }
 
-// Harbor + encryption (+ optional Keycloak) and AWS in one withCredentials — Jenkins cannot nest bindings.
+// Resolve Harbor + encryption in separate withCredentials blocks, then AWS (no combined binding list).
 void withHelmAppCredentials(Closure body) {
-  def awsCredId = params.CREDENTIAL_AWS?.trim() ?: 'aws-creds'
-  def bindings = []
-  bindings << usernamePassword(
+  def harborUser = ''
+  def harborPass = ''
+  def encryptionKey = params.ENCRYPTION_KEY_FALLBACK ?: 'dev-spendsmart-encryption-key-change-me'
+
+  if (!params.CREDENTIAL_HARBOR?.trim()) {
+    error('CREDENTIAL_HARBOR must point to a Jenkins Username with password credential (e.g. harbor-creds)')
+  }
+  withCredentials([usernamePassword(
     credentialsId: params.CREDENTIAL_HARBOR.trim(),
     usernameVariable: 'HARBOR_DOCKER_USERNAME',
     passwordVariable: 'HARBOR_DOCKER_PASSWORD',
-  )
-  def useEncryptionCred = params.CREDENTIAL_ENCRYPTION_KEY?.trim()
-  if (useEncryptionCred) {
-    bindings << string(
+  )]) {
+    harborUser = "${env.HARBOR_DOCKER_USERNAME}"
+    harborPass = "${env.HARBOR_DOCKER_PASSWORD}"
+  }
+
+  if (params.CREDENTIAL_ENCRYPTION_KEY?.trim()) {
+    withCredentials([string(
       credentialsId: params.CREDENTIAL_ENCRYPTION_KEY.trim(),
       variable: 'ENCRYPTION_KEY',
-    )
+    )]) {
+      encryptionKey = "${env.ENCRYPTION_KEY}"
+    }
   }
-  if (params.DEPLOY_KEYCLOAK && params.CREDENTIAL_KEYCLOAK_ADMIN?.trim()) {
-    bindings << string(
-      credentialsId: params.CREDENTIAL_KEYCLOAK_ADMIN.trim(),
-      variable: 'KEYCLOAK_ADMIN_PASSWORD',
-    )
-  }
-  bindings << [
-    $class: 'AmazonWebServicesCredentialsBinding',
-    credentialsId: awsCredId,
-    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY',
+
+  def secretEnv = [
+    "HARBOR_DOCKER_USERNAME=${harborUser}",
+    "HARBOR_DOCKER_PASSWORD=${harborPass}",
+    "ENCRYPTION_KEY=${encryptionKey}",
   ]
-  withCredentials(bindings) {
-    if (useEncryptionCred) {
+  withAwsCredentials {
+    withEnv(secretEnv) {
       body()
-    } else {
-      withEnv(["ENCRYPTION_KEY=${params.ENCRYPTION_KEY_FALLBACK}"]) {
-        body()
-      }
     }
   }
 }

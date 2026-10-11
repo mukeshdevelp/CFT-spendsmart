@@ -206,35 +206,49 @@ void withAwsCredentials(Closure body) {
 }
 
 void withAnsibleDeployCredentials(Closure body) {
-  def awsCredId = params.CREDENTIAL_AWS?.trim() ?: 'aws-creds'
-  def bindings = []
-  bindings << usernamePassword(
+  def harborUser = ''
+  def harborPass = ''
+  def encryptionKey = params.ENCRYPTION_KEY_FALLBACK ?: 'dev-spendsmart-encryption-key-change-me'
+  def sshKey = ''
+  def sshUser = ''
+
+  withCredentials([usernamePassword(
     credentialsId: params.CREDENTIAL_HARBOR.trim(),
     usernameVariable: 'HARBOR_DOCKER_USERNAME',
     passwordVariable: 'HARBOR_DOCKER_PASSWORD',
-  )
-  def useEncryptionCred = params.CREDENTIAL_ENCRYPTION_KEY?.trim()
-  if (useEncryptionCred) {
-    bindings << string(credentialsId: params.CREDENTIAL_ENCRYPTION_KEY.trim(), variable: 'ENCRYPTION_KEY')
+  )]) {
+    harborUser = "${env.HARBOR_DOCKER_USERNAME}"
+    harborPass = "${env.HARBOR_DOCKER_PASSWORD}"
   }
-  bindings << sshUserPrivateKey(
+
+  if (params.CREDENTIAL_ENCRYPTION_KEY?.trim()) {
+    withCredentials([string(
+      credentialsId: params.CREDENTIAL_ENCRYPTION_KEY.trim(),
+      variable: 'ENCRYPTION_KEY',
+    )]) {
+      encryptionKey = "${env.ENCRYPTION_KEY}"
+    }
+  }
+
+  withCredentials([sshUserPrivateKey(
     credentialsId: params.CREDENTIAL_BASTION_SSH.trim(),
     keyFileVariable: 'ANSIBLE_PRIVATE_KEY_FILE',
     usernameVariable: 'ANSIBLE_SSH_USER',
-  )
-  bindings << [
-    $class: 'AmazonWebServicesCredentialsBinding',
-    credentialsId: awsCredId,
-    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY',
+  )]) {
+    sshKey = "${env.ANSIBLE_PRIVATE_KEY_FILE}"
+    sshUser = "${env.ANSIBLE_SSH_USER}"
+  }
+
+  def secretEnv = [
+    "HARBOR_DOCKER_USERNAME=${harborUser}",
+    "HARBOR_DOCKER_PASSWORD=${harborPass}",
+    "ENCRYPTION_KEY=${encryptionKey}",
+    "ANSIBLE_PRIVATE_KEY_FILE=${sshKey}",
+    "ANSIBLE_SSH_USER=${sshUser}",
   ]
-  withCredentials(bindings) {
-    if (useEncryptionCred) {
+  withAwsCredentials {
+    withEnv(secretEnv) {
       body()
-    } else {
-      withEnv(["ENCRYPTION_KEY=${params.ENCRYPTION_KEY_FALLBACK}"]) {
-        body()
-      }
     }
   }
 }
