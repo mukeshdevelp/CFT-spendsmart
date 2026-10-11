@@ -35,13 +35,13 @@ Parameters:
     Default: c7i-flex.large
   EksNodeDesiredSize:
     Type: Number
-    Default: 1
+    Default: 2
   EksNodeMinSize:
     Type: Number
-    Default: 1
+    Default: 2
   EksNodeMaxSize:
     Type: Number
-    Default: 1
+    Default: 2
   EksNodeDiskSize:
     Type: Number
     Default: 48
@@ -472,7 +472,7 @@ Resources:
         BlockDeviceMappings:
           - DeviceName: !Ref EksNodeDeviceName
             Ebs:
-              VolumeSize: !Ref EksNodeDiskSize
+              VolumeSize: 100
               VolumeType: !Ref EksNodeDiskType
               Encrypted: true
               DeleteOnTermination: true

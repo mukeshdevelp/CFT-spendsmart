@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SpendSmart Helm chart only — deploy after the main infrastructure stack (main.yml)
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: spendsmart-dev
+  ClusterName:
+    Type: String
+    Description: EKS cluster name (from infra stack output EksClusterName).
+  ClusterSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PrivateSubnetId:
+    Type: AWS::EC2::Subnet::Id
+  AlbDnsName:
+    Type: String
+    Description: ALB DNS name from infra stack output AlbDnsName.
+  PostgresSecretName:
+    Type: String
+    Default: spendsmart-dev/postgres
+  ClickHouseSecretName:
+    Type: String
+    Default: spendsmart-dev/clickhouse
+  SpendSmartValuesS3Uri:
+    Type: String
+    Default: ''
+  ChartRepository:
+    Type: String
+    Default: https://github.com/OT-CONTAINER-KIT/helm-charts.git
+  ChartBranch:
+    Type: String
+    Default: feature/spendsmart-helm-chart
+  Namespace:
+    Type: String
+    Default: spendsmart
+  InstallAlbController:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    Description: Install AWS Load Balancer Controller if not already present on the cluster.
+
+Resources:
+  SpendSmart:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./modules/spendsmart/template.yaml
+      Parameters:
+        NamePrefix: !Ref NamePrefix
+        ClusterName: !Ref ClusterName
+        ClusterSecurityGroupId: !Ref ClusterSecurityGroupId
+        VpcId: !Ref VpcId
+        PrivateSubnetId: !Ref PrivateSubnetId
+        InstallAlbController: !Ref InstallAlbController
+        ChartRepository: !Ref ChartRepository
+        ChartBranch: !Ref ChartBranch
+        Namespace: !Ref Namespace
+        AlbDnsName: !Ref AlbDnsName
+        PostgresSecretName: !Ref PostgresSecretName
+        ClickHouseSecretName: !Ref ClickHouseSecretName
+        ValuesS3Uri: !Ref SpendSmartValuesS3Uri
+
+Outputs:
+  SpendSmartDeploymentHostId:
+    Value: !GetAtt SpendSmart.Outputs.DeploymentHostId
+  SpendSmartNamespace:
+    Value: !GetAtt SpendSmart.Outputs.Namespace
+  SpendSmartIngressName:
+    Value: !GetAtt SpendSmart.Outputs.IngressName

@@ -1,0 +1,258 @@
+pipeline {
+  agent any
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+  }
+
+  parameters {
+    choice(
+      name: 'AWS_REGION',
+      choices: ['us-east-1', 'ap-south-1'],
+      description: 'Region where infra and Helm stacks run'
+    )
+    string(
+      name: 'INFRA_STACK_NAME',
+      defaultValue: 'spendsmart-dev',
+      description: 'Existing main.yml stack name (outputs supply cluster/VPC/ALB)'
+    )
+    string(
+      name: 'HELM_STACK_NAME',
+      defaultValue: 'spendsmart-dev-helm',
+      description: 'CloudFormation stack for helm-main.yml'
+    )
+    string(
+      name: 'CFN_TEMPLATE_BUCKET',
+      defaultValue: '',
+      description: 'S3 bucket for packaged nested templates'
+    )
+    string(
+      name: 'NAME_PREFIX',
+      defaultValue: 'spendsmart-dev',
+      description: 'NamePrefix / Secrets Manager path prefix'
+    )
+    string(
+      name: 'SPENDSMART_VALUES_S3_URI',
+      defaultValue: '',
+      description: 'Optional Helm values URI. Empty + UPLOAD_CLIENT_VALUES uses s3://<bucket>/client-a-values.yaml'
+    )
+    booleanParam(
+      name: 'UPLOAD_CLIENT_VALUES',
+      defaultValue: true,
+      description: 'Upload client-a-values.yaml to the template bucket'
+    )
+    choice(
+      name: 'INSTALL_ALB_CONTROLLER',
+      choices: ['true', 'false'],
+      description: 'Install AWS Load Balancer Controller during Helm deploy'
+    )
+    booleanParam(
+      name: 'WAIT_FOR_STACK',
+      defaultValue: true,
+      description: 'Wait for Helm stack create/update'
+    )
+  }
+
+  environment {
+    AWS_DEFAULT_REGION = "${params.AWS_REGION}"
+    PACKAGED_HELM_TEMPLATE = 'packaged-helm.yml'
+    HELM_PARAMETERS = 'jenkins-helm-parameters.json'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Preflight') {
+      steps {
+        sh '''
+          set -euo pipefail
+          command -v aws >/dev/null
+          test -f helm-main.yml
+          if [ -z "${CFN_TEMPLATE_BUCKET}" ]; then
+            echo "CFN_TEMPLATE_BUCKET is required"
+            exit 1
+          fi
+          aws s3api head-bucket --bucket "${CFN_TEMPLATE_BUCKET}"
+          aws cloudformation describe-stacks \
+            --stack-name "${INFRA_STACK_NAME}" \
+            --region "${AWS_REGION}" \
+            --query 'Stacks[0].StackStatus' \
+            --output text
+        '''
+      }
+    }
+
+    stage('Upload Helm values') {
+      when {
+        expression { return params.UPLOAD_CLIENT_VALUES }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          test -f client-a-values.yaml
+          aws s3 cp client-a-values.yaml "s3://${CFN_TEMPLATE_BUCKET}/client-a-values.yaml"
+        '''
+      }
+    }
+
+    stage('Resolve infra outputs') {
+      steps {
+        sh '''
+          set -euo pipefail
+          VALUES_URI="${SPENDSMART_VALUES_S3_URI}"
+          if [ -z "$VALUES_URI" ] && [ "${UPLOAD_CLIENT_VALUES}" = "true" ]; then
+            VALUES_URI="s3://${CFN_TEMPLATE_BUCKET}/client-a-values.yaml"
+          fi
+          export VALUES_URI
+          python3 <<PY
+          import json
+          import os
+          import subprocess
+
+          region = os.environ["AWS_REGION"]
+          stack = os.environ["INFRA_STACK_NAME"]
+          out = subprocess.check_output(
+              [
+                  "aws", "cloudformation", "describe-stacks",
+                  "--stack-name", stack,
+                  "--region", region,
+                  "--query", "Stacks[0].Outputs",
+                  "--output", "json",
+              ],
+              text=True,
+          )
+          outputs = {o["OutputKey"]: o["OutputValue"] for o in json.loads(out)}
+
+          def require(key):
+              v = outputs.get(key)
+              if not v:
+                  raise SystemExit(f"Missing infra stack output: {key}")
+              return v
+
+          params = [
+              {"ParameterKey": "NamePrefix", "ParameterValue": os.environ["NAME_PREFIX"]},
+              {"ParameterKey": "ClusterName", "ParameterValue": require("EksClusterName")},
+              {"ParameterKey": "ClusterSecurityGroupId", "ParameterValue": require("EksClusterSecurityGroupId")},
+              {"ParameterKey": "VpcId", "ParameterValue": require("VpcId")},
+              {"ParameterKey": "PrivateSubnetId", "ParameterValue": require("PrivateSubnet1Id")},
+              {"ParameterKey": "AlbDnsName", "ParameterValue": require("AlbDnsName")},
+              {"ParameterKey": "PostgresSecretName", "ParameterValue": f"{os.environ['NAME_PREFIX']}/postgres"},
+              {"ParameterKey": "ClickHouseSecretName", "ParameterValue": f"{os.environ['NAME_PREFIX']}/clickhouse"},
+              {"ParameterKey": "SpendSmartValuesS3Uri", "ParameterValue": os.environ.get("VALUES_URI", "")},
+              {"ParameterKey": "InstallAlbController", "ParameterValue": os.environ["INSTALL_ALB_CONTROLLER"]},
+          ]
+          Path = __import__("pathlib").Path
+          Path(os.environ["HELM_PARAMETERS"]).write_text(json.dumps(params, indent=2) + "\\n")
+          PY
+          cat "${HELM_PARAMETERS}"
+        '''
+      }
+    }
+
+    stage('Package Helm template') {
+      steps {
+        sh '''
+          set -euo pipefail
+          aws cloudformation package \
+            --template-file helm-main.yml \
+            --s3-bucket "${CFN_TEMPLATE_BUCKET}" \
+            --output-template-file "${PACKAGED_HELM_TEMPLATE}" \
+            --region "${AWS_REGION}"
+        '''
+      }
+    }
+
+    stage('Validate') {
+      steps {
+        sh '''
+          set -euo pipefail
+          aws cloudformation validate-template \
+            --template-body file://"${PACKAGED_HELM_TEMPLATE}" \
+            --region "${AWS_REGION}"
+        '''
+      }
+    }
+
+    stage('Deploy Helm stack') {
+      steps {
+        sh '''
+          set -euo pipefail
+          if aws cloudformation describe-stacks \
+            --stack-name "${HELM_STACK_NAME}" \
+            --region "${AWS_REGION}" >/dev/null 2>&1; then
+            CHANGE_SET_TYPE=UPDATE
+            aws cloudformation update-stack \
+              --stack-name "${HELM_STACK_NAME}" \
+              --template-body file://"${PACKAGED_HELM_TEMPLATE}" \
+              --parameters file://"${HELM_PARAMETERS}" \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --region "${AWS_REGION}"
+          else
+            CHANGE_SET_TYPE=CREATE
+            aws cloudformation create-stack \
+              --stack-name "${HELM_STACK_NAME}" \
+              --template-body file://"${PACKAGED_HELM_TEMPLATE}" \
+              --parameters file://"${HELM_PARAMETERS}" \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --region "${AWS_REGION}"
+          fi
+          echo "${CHANGE_SET_TYPE}" > .helm-cfn-change-type
+        '''
+      }
+    }
+
+    stage('Wait for Helm stack') {
+      when {
+        expression { return params.WAIT_FOR_STACK }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          CHANGE_SET_TYPE=$(cat .helm-cfn-change-type)
+          if [ "$CHANGE_SET_TYPE" = "CREATE" ]; then
+            aws cloudformation wait stack-create-complete \
+              --stack-name "${HELM_STACK_NAME}" \
+              --region "${AWS_REGION}"
+          else
+            aws cloudformation wait stack-update-complete \
+              --stack-name "${HELM_STACK_NAME}" \
+              --region "${AWS_REGION}"
+          fi
+        '''
+      }
+    }
+
+    stage('Helm stack outputs') {
+      steps {
+        sh '''
+          set -euo pipefail
+          aws cloudformation describe-stacks \
+            --stack-name "${HELM_STACK_NAME}" \
+            --region "${AWS_REGION}" \
+            --query 'Stacks[0].Outputs' \
+            --output table
+        '''
+      }
+    }
+  }
+
+  post {
+    failure {
+      sh '''
+        set +e
+        aws cloudformation describe-stack-events \
+          --stack-name "${HELM_STACK_NAME}" \
+          --region "${AWS_REGION}" \
+          --max-items 20 \
+          --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[Timestamp,LogicalResourceId,ResourceStatusReason]' \
+          --output table
+      '''
+    }
+  }
+}

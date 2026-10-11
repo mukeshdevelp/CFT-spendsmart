@@ -13,7 +13,12 @@ Parameters:
   S3BucketName:
     Type: String
     Default: athena-results-spendsmart-dev
-    Description: Must be globally unique. Change if this bucket name is already taken.
+    Description: Globally unique bucket created and deleted with this stack (DeletionPolicy Delete).
+
+  CurReportName:
+    Type: String
+    Default: spendsmart-cur
+    Description: Cost and Usage Report name (one per account).
 
   DataPrefix:
     Type: String
@@ -124,6 +129,7 @@ Resources:
 
   CurBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    DependsOn: DataBucket
     Properties:
       Bucket: !Ref DataBucket
       PolicyDocument:
@@ -156,7 +162,7 @@ Resources:
     Type: AWS::CUR::ReportDefinition
     DependsOn: CurBucketPolicy
     Properties:
-      ReportName: spendsmart-cur
+      ReportName: !Ref CurReportName
       TimeUnit: HOURLY
       Format: Parquet
       Compression: Parquet
@@ -180,9 +186,9 @@ Outputs:
   BucketArn:
     Value: !GetAtt DataBucket.Arn
   CurReportName:
-    Value: spendsmart-cur
+    Value: !Ref CurReportName
   CurLocation:
-    Value: !Sub 's3://${DataBucket}/cur/spendsmart-cur/'
+    Value: !Sub 's3://${DataBucket}/cur/${CurReportName}/'
   CurAthenaDatabaseName:
     Value: athenacurcfn_spendsmart_cur
   CurAthenaTableName:

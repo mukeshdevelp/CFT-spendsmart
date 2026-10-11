@@ -29,7 +29,14 @@ The AWS Load Balancer Controller creates the application ALB and target group fr
 
 ## Optional Application Deployment
 
-`DeploySpendSmart` defaults to `false`. The chart consumes external credentials and service configuration, so first deploy the infrastructure, connect to the private cluster, create namespace `spendsmart`, and create these chart-required Secrets using an approved secret-management process:
+`SpendSmartWorkloadMode` defaults to `LeaveExisting` so `main.yml` deploys infrastructure only (no circular dependency with bastion bootstrap). Install the Helm chart with a **second** pipeline or stack:
+
+1. **Jenkins:** run the job defined in `Jenkinsfile.helm` after the infra stack is `CREATE_COMPLETE`. It reads outputs from `INFRA_STACK_NAME` and deploys `helm-main.yml` as `spendsmart-dev-helm` (configurable).
+2. **CLI:** package `helm-main.yml`, pass `ClusterName`, `VpcId`, `AlbDnsName`, and other parameters from `aws cloudformation describe-stacks` on the infra stack.
+
+To install the chart inside the same root stack instead, set `SpendSmartWorkloadMode=InstallNew` on create or update.
+
+The chart consumes external credentials and service configuration. Before Helm runs, create these chart-required Secrets (or let the spendsmart module create DB-related ones) using an approved secret-management process:
 
 - `harbor-ldc-coe-regcred`
 - `encryption-key`

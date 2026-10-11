@@ -1,6 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Installs the SpendSmart Helm chart and an ALB Ingress into EKS
+Description: Installs SpendSmart Helm chart, Keycloak, app secrets, and ALB Ingress
+
 Parameters:
+  NamePrefix:
+    Type: String
   ClusterName:
     Type: String
   ClusterSecurityGroupId:
@@ -21,9 +24,6 @@ Parameters:
   ValuesS3Uri:
     Type: String
     Default: ''
-  ValuesS3ObjectArn:
-    Type: String
-    Default: ''
   AlbScheme:
     Type: String
     AllowedValues: [internet-facing, internal]
@@ -38,19 +38,27 @@ Parameters:
     Type: String
     AllowedValues: ['true', 'false']
     Default: 'true'
+  AlbDnsName:
+    Type: String
+  PostgresSecretName:
+    Type: String
+  ClickHouseSecretName:
+    Type: String
   DeploymentInstanceType:
     Type: String
     Default: t3.small
   DeploymentAmi:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
 Conditions:
-  HasValuesS3Object: !Not [!Equals [!Ref ValuesS3ObjectArn, '']]
+  HasValuesS3Uri: !Not [!Equals [!Ref ValuesS3Uri, '']]
+
 Resources:
   DeploymentSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: SpendSmart deployment host with no inbound access
+      GroupDescription: SpendSmart deployment host
       VpcId: !Ref VpcId
       SecurityGroupEgress:
         - IpProtocol: '-1'
@@ -58,6 +66,8 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-deployment'
+        - Key: ManagedBy
+          Value: CFT
 
   DeploymentHostToClusterApi:
     Type: AWS::EC2::SecurityGroupIngress
@@ -67,7 +77,7 @@ Resources:
       FromPort: 443
       ToPort: 443
       SourceSecurityGroupId: !Ref DeploymentSecurityGroup
-      Description: HTTPS from the SpendSmart deployment host to the EKS API
+      Description: HTTPS from SpendSmart deployment host
 
   DeploymentRole:
     Type: AWS::IAM::Role
@@ -92,6 +102,14 @@ Resources:
               - Effect: Allow
                 Action: cloudformation:SignalResource
                 Resource: !Ref AWS::StackId
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${PostgresSecretName}*'
+                  - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ClickHouseSecretName}*'
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::*/client-a-values.yaml'
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-deployment'
@@ -101,20 +119,6 @@ Resources:
     Properties:
       Roles:
         - !Ref DeploymentRole
-
-  DeploymentValuesReadPolicy:
-    Type: AWS::IAM::Policy
-    Condition: HasValuesS3Object
-    Properties:
-      PolicyName: SpendSmartValuesRead
-      Roles:
-        - !Ref DeploymentRole
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Action: s3:GetObject
-            Resource: !Ref ValuesS3ObjectArn
 
   DeploymentAccessEntry:
     Type: AWS::EKS::AccessEntry
@@ -133,7 +137,7 @@ Resources:
     CreationPolicy:
       ResourceSignal:
         Count: 1
-        Timeout: PT60M
+        Timeout: PT90M
     Properties:
       ImageId: !Ref DeploymentAmi
       InstanceType: !Ref DeploymentInstanceType
@@ -147,78 +151,185 @@ Resources:
         HttpTokens: required
         HttpPutResponseHopLimit: 2
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -Eeuo pipefail
-          trap 'status=$?; aws cloudformation signal-resource --stack-name ${AWS::StackName} --logical-resource-id DeploymentHost --unique-id spendsmart-deployer --status "$([ "$status" -eq 0 ] && echo SUCCESS || echo FAILURE)" --region ${AWS::Region} || true' EXIT
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            LOG=/var/log/spendsmart-helm-install.log
+            exec > >(tee -a "$LOG") 2>&1
+            signal_cfn() {
+              /opt/aws/bin/cfn-signal -e "$1" --stack ${AWS::StackName} --resource DeploymentHost --region ${AWS::Region} --reason "$2"
+            }
+            on_error() {
+              signal_cfn 1 "helm install failed at line $1: $(tail -c 3800 $LOG)"
+            }
+            trap 'on_error $LINENO' ERR
+            set -euo pipefail
+            # AL2023: use curl-minimal from the AMI; do not dnf install curl (package conflict).
+            dnf install -y git tar gzip aws-cfn-bootstrap python3
+            command -v curl >/dev/null || dnf install -y curl-minimal
+            curl -fsSL https://get.helm.sh/helm-v3.17.3-linux-amd64.tar.gz -o /tmp/helm.tar.gz
+            tar -xzf /tmp/helm.tar.gz -C /tmp && install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+            cluster_version=$(aws eks describe-cluster --name ${ClusterName} --region ${AWS::Region} --query 'cluster.version' --output text)
+            curl -fsSL "https://dl.k8s.io/release/v$cluster_version.0/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
+            chmod 0755 /usr/local/bin/kubectl
+            export KUBECONFIG=/root/.kube/config
+            mkdir -p /root/.kube
+            aws eks update-kubeconfig --name ${ClusterName} --region ${AWS::Region} --kubeconfig "$KUBECONFIG"
+            kubectl wait --for=condition=Ready node --all --timeout=900s
 
-          dnf install -y git tar gzip curl
-          curl -fsSL https://get.helm.sh/helm-v3.17.3-linux-amd64.tar.gz -o /tmp/helm.tar.gz
-          tar -xzf /tmp/helm.tar.gz -C /tmp
-          install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+            if [ '${InstallAlbController}' = 'true' ]; then
+              helm repo add eks https://aws.github.io/eks-charts
+              helm repo update
+              helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+                --version ${AlbControllerChartVersion} \
+                --namespace kube-system --create-namespace \
+                --set clusterName=${ClusterName} \
+                --set region=${AWS::Region} \
+                --set vpcId=${VpcId} \
+                --set serviceAccount.create=true \
+                --set serviceAccount.name=aws-load-balancer-controller
+              kubectl rollout status deployment/aws-load-balancer-controller -n kube-system --timeout=15m
+            fi
 
-          cluster_version=$(aws eks describe-cluster --name ${ClusterName} --region ${AWS::Region} --query 'cluster.version' --output text)
-          curl -fsSL "https://dl.k8s.io/release/v$cluster_version.0/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
-          chmod 0755 /usr/local/bin/kubectl
-          aws eks update-kubeconfig --name ${ClusterName} --region ${AWS::Region}
+            PGPASS=$(aws secretsmanager get-secret-value --secret-id '${PostgresSecretName}' --region ${AWS::Region} --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')
+            CHPASS=$(aws secretsmanager get-secret-value --secret-id '${ClickHouseSecretName}' --region ${AWS::Region} --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')
+            kubectl create namespace ${Namespace} --dry-run=client -o yaml | kubectl apply -f -
 
-          if [ '${InstallAlbController}' = 'true' ]; then
-            helm repo add eks https://aws.github.io/eks-charts
-            helm repo update
-            helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
-              --version ${AlbControllerChartVersion} \
-              --namespace kube-system --create-namespace \
-              --set clusterName=${ClusterName} \
-              --set region=${AWS::Region} \
-              --set vpcId=${VpcId} \
-              --set serviceAccount.create=true \
-              --set serviceAccount.name=aws-load-balancer-controller
-          fi
-          kubectl rollout status deployment/aws-load-balancer-controller -n kube-system --timeout=10m
+            kubectl -n ${Namespace} create secret generic clickhouse \
+              --from-literal=CLICKHOUSE_HOST=clickhouse.databases.svc.cluster.local \
+              --from-literal=CLICKHOUSE_PORT=9000 \
+              --from-literal=CLICKHOUSE_USER=default \
+              --from-literal=CLICKHOUSE_PASSWORD="$CHPASS" \
+              --from-literal=CLICKHOUSE_DATABASE=spendsmart \
+              --dry-run=client -o yaml | kubectl apply -f -
+            kubectl -n ${Namespace} create secret generic clickhouse-db \
+              --from-literal=CLICKHOUSE_HOST=clickhouse.databases.svc.cluster.local \
+              --from-literal=CLICKHOUSE_PORT=9000 \
+              --from-literal=CLICKHOUSE_USER=default \
+              --from-literal=CLICKHOUSE_PASSWORD="$CHPASS" \
+              --from-literal=CLICKHOUSE_DATABASE=spendsmart \
+              --dry-run=client -o yaml | kubectl apply -f -
+            kubectl -n ${Namespace} create secret generic postgres-config \
+              --from-literal=POSTGRES_HOST=postgres.databases.svc.cluster.local \
+              --from-literal=POSTGRES_PORT=5432 \
+              --from-literal=POSTGRES_USER=dbadmin \
+              --from-literal=POSTGRES_PASSWORD="$PGPASS" \
+              --from-literal=POSTGRES_DB=cloudsentry \
+              --dry-run=client -o yaml | kubectl apply -f -
+            kubectl -n ${Namespace} create secret generic encryption-key \
+              --from-literal=ENCRYPTION_KEY="$(openssl rand -hex 32)" \
+              --dry-run=client -o yaml | kubectl apply -f -
 
-          git clone --depth 1 --branch ${ChartBranch} ${ChartRepository} /opt/helm-charts
-          values_args=()
-          if [ -n '${ValuesS3Uri}' ]; then
-            aws s3 cp '${ValuesS3Uri}' /tmp/spendsmart-values.yaml
-            values_args+=(--values /tmp/spendsmart-values.yaml)
-          fi
-          if [ -n '${ValuesS3Uri}' ]; then
+            KEYCLOAK_URL="http://keycloak.${Namespace}.svc.cluster.local:8080"
+            API_URL="http://${AlbDnsName}"
+            if [ -n '${ValuesS3Uri}' ]; then
+              aws s3 cp '${ValuesS3Uri}' /tmp/client-a-values.yaml
+            else
+              cat >/tmp/client-a-values.yaml <<EOF
+            backend:
+              nodeSelector:
+                spendsmart.io/workload: backend
+            frontend:
+              nodeSelector:
+                spendsmart.io/workload: frontend
+              service:
+                type: NodePort
+              configMap:
+                data:
+                  VITE_API_BASE_URL: "$API_URL"
+                  VITE_CLOUD_SENTRY_API_BASE_URL: ""
+                  VITE_KEYCLOAK_CLIENT_ID: spendsmart-frontend
+                  VITE_KEYCLOAK_REALM: spendsmart
+                  VITE_KEYCLOAK_URL: "$KEYCLOAK_URL"
+            cloudsentry:
+              enabled: false
+            engine:
+              enabled: true
+              nodeSelector:
+                spendsmart.io/workload: backend
+            EOF
+            fi
+
+            kubectl apply -f - <<KEYCLOAK
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: keycloak
+              namespace: ${Namespace}
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: keycloak
+              template:
+                metadata:
+                  labels:
+                    app: keycloak
+                spec:
+                  nodeSelector:
+                    spendsmart.io/workload: frontend
+                  containers:
+                    - name: keycloak
+                      image: quay.io/keycloak/keycloak:25.0
+                      args: ["start-dev"]
+                      env:
+                        - name: KEYCLOAK_ADMIN
+                          value: admin
+                        - name: KEYCLOAK_ADMIN_PASSWORD
+                          value: admin
+                        - name: KC_HTTP_PORT
+                          value: "8080"
+                      ports:
+                        - containerPort: 8080
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: keycloak
+              namespace: ${Namespace}
+            spec:
+              selector:
+                app: keycloak
+              ports:
+                - port: 8080
+                  targetPort: 8080
+            KEYCLOAK
+            kubectl -n ${Namespace} rollout status deployment/keycloak --timeout=900s
+
+            git clone --depth 1 --branch ${ChartBranch} ${ChartRepository} /opt/helm-charts
             helm upgrade --install spendsmart /opt/helm-charts/charts/spendsmart \
-              --namespace ${Namespace} --create-namespace \
-              --set-string frontend.service.type=NodePort \
-              --values /tmp/spendsmart-values.yaml
-          else
-            helm upgrade --install spendsmart /opt/helm-charts/charts/spendsmart \
-              --namespace ${Namespace} --create-namespace \
-              --set-string frontend.service.type=NodePort
-          fi
+              --namespace ${Namespace} \
+              --values /tmp/client-a-values.yaml \
+              --wait --timeout 30m
 
-          kubectl apply -f - <<'INGRESS'
-          apiVersion: networking.k8s.io/v1
-          kind: Ingress
-          metadata:
-            name: spendsmart
-            namespace: ${Namespace}
-            annotations:
-              alb.ingress.kubernetes.io/scheme: ${AlbScheme}
-              alb.ingress.kubernetes.io/target-type: instance
-              alb.ingress.kubernetes.io/healthcheck-path: /
-              alb.ingress.kubernetes.io/success-codes: 200-399
-              alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
-          spec:
-            ingressClassName: alb
-            rules:
-              - http:
-                  paths:
-                    - path: /
-                      pathType: Prefix
-                      backend:
-                        service:
-                          name: spendsmart-frontend
-                          port:
-                            number: 80
-          INGRESS
-          kubectl wait --for=jsonpath='{.status.loadBalancer.ingress}' ingress/spendsmart -n ${Namespace} --timeout=10m
+            kubectl apply -f - <<INGRESS
+            apiVersion: networking.k8s.io/v1
+            kind: Ingress
+            metadata:
+              name: spendsmart
+              namespace: ${Namespace}
+              annotations:
+                alb.ingress.kubernetes.io/scheme: ${AlbScheme}
+                alb.ingress.kubernetes.io/target-type: instance
+                alb.ingress.kubernetes.io/healthcheck-path: /
+                alb.ingress.kubernetes.io/success-codes: 200-399
+                alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+            spec:
+              ingressClassName: alb
+              rules:
+                - http:
+                    paths:
+                      - path: /
+                        pathType: Prefix
+                        backend:
+                          service:
+                            name: spendsmart-frontend
+                            port:
+                              number: 80
+            INGRESS
+            kubectl -n ${Namespace} get deploy,svc,pods,ingress
+            signal_cfn 0 "SpendSmart helm release installed"
+          - AlbDnsName: !Ref AlbDnsName
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-deployment'
@@ -230,5 +341,3 @@ Outputs:
     Value: spendsmart
   Namespace:
     Value: !Ref Namespace
-  AlbControllerVersion:
-    Value: !Ref AlbControllerVersion

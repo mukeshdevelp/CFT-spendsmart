@@ -1,0 +1,55 @@
+# Helm values for OT-CONTAINER-KIT spendsmart chart (client-a).
+# Non-secret URLs are overridden at deploy time from CloudFormation outputs.
+
+backend:
+  image:
+    repository: harbor.ldc.opstree.dev/coe/uniteconpro-backend-prod
+    tag: latest
+  nodeSelector:
+    spendsmart.io/workload: backend
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+frontend:
+  image:
+    repository: harbor.ldc.opstree.dev/coe/uniteconpro-frontend-prod
+    tag: latest
+  nodeSelector:
+    spendsmart.io/workload: frontend
+  service:
+    type: NodePort
+  configMap:
+    data:
+      VITE_API_BASE_URL: PLACEHOLDER_API_URL
+      VITE_CLOUD_SENTRY_API_BASE_URL: PLACEHOLDER_CLOUDSENTRY_URL
+      VITE_KEYCLOAK_CLIENT_ID: spendsmart-frontend
+      VITE_KEYCLOAK_REALM: spendsmart
+      VITE_KEYCLOAK_URL: PLACEHOLDER_KEYCLOAK_URL
+  nginx:
+    csp:
+      connectSrc:
+        - "'self'"
+        - PLACEHOLDER_KEYCLOAK_URL
+        - PLACEHOLDER_CLOUDSENTRY_URL
+        - "wss:"
+      frameSrc:
+        - "'self'"
+        - PLACEHOLDER_KEYCLOAK_URL
+        - "https:"
+
+cloudsentry:
+  enabled: false
+
+engine:
+  enabled: true
+  image:
+    repository: harbor.ldc.opstree.dev/coe/uniteconpro-engine-dev
+    tag: latest
+  schedule: "5 11,23 * * *"
+  nodeSelector:
+    spendsmart.io/workload: backend

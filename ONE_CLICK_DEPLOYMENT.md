@@ -16,7 +16,7 @@ This guide deploys the modular CloudFormation root stack in `main.yml`. Its nest
 | AWS Load Balancer Controller | Helm / Kubernetes | Watches Ingress resources and provisions AWS load-balancing resources |
 | Application ALB and target group | Load Balancer Controller | Routes requests and registers worker nodes for the SpendSmart Ingress |
 
-Set `DeploySpendSmart=true` only after the required namespace Secrets exist. The optional nested module installs the controller and app with Helm and applies the frontend Ingress.
+Default `SpendSmartWorkloadMode` is `LeaveExisting` (infra only). After the stack is healthy, deploy the chart with `helm-main.yml` / `Jenkinsfile.helm`, or set `SpendSmartWorkloadMode=InstallNew` on the root stack. Create required namespace Secrets before Helm runs.
 
 ## Pre-requisites
 
@@ -32,6 +32,10 @@ Set `DeploySpendSmart=true` only after the required namespace Secrets exist. The
 | Ensure the deployment operator can reach the private EKS API endpoint, using a connected VPC network, VPN, Direct Connect, or the bastion. | The EKS API endpoint is private-only by default, and `kubectl`/Helm need network access to it. |
 
 **Cost and bucket deletion:** The NAT gateway, EKS control plane, EC2 nodes, bastion, ALB, and data transfer incur charges. CloudFormation deletes the S3 bucket on rollback or stack deletion. S3 requires a bucket to be empty, including all object versions, before it can be deleted; a non-empty bucket can make stack cleanup fail.
+
+### S3 nested stack fails with “Validation failure detected”
+
+Usually **`S3BucketName` (`athena-results-spendsmart-dev`) already exists** outside the stack, or **`spendsmart-cur`** CUR report already exists. Empty and delete the orphan bucket, or remove the old CUR definition in Billing → Cost & Usage Reports, then re-deploy. The stack creates the bucket with `DeletionPolicy: Delete` so rollback removes it when the bucket is empty (including all object versions).
 
 ## Console Deployment
 
@@ -181,6 +185,7 @@ The ALB DNS name appears in the Ingress `ADDRESS` field. The controller owns and
 | Controller reports `AccessDenied` | Pod Identity association or service-account settings do not match the Helm release. | Compare Helm namespace/service account with `AlbControllerNamespace` and `AlbControllerServiceAccountName`; inspect controller logs and association status. |
 | Ingress has no ALB address | Controller is not ready, Ingress class is wrong, subnet tags are missing, or AWS API egress is blocked. | Check controller deployment/events, `ingressClassName: alb`, public-subnet discovery tags, and node/pod egress through NAT or endpoints. |
 | ALB target health is unhealthy/503 | Backend Service ports, target type, health-check path, or pod reachability is wrong. | Check Service endpoints/ports and Ingress annotations; inspect controller logs and target health. |
+| `ClusterBootstrap` stuck; bastion log shows `curl-minimal` vs `curl` dnf conflict; `kubectl: command not found` | Bastion UserData used `dnf install curl` on Amazon Linux 2023. | Re-package and update the stack so `modules/bastion/template.yaml` is current (install only `aws-cfn-bootstrap` and `python3`). Replace the bastion instance if UserData did not re-run. On a running bastion, use `scripts/bastion-recover-bootstrap.sh` or install kubectl manually; signal `ClusterBootstrap` only after DB rollouts succeed. Log: `/var/log/spendsmart-cluster-bootstrap.log`. |
 
 ## Delete and Cost Cleanup
 

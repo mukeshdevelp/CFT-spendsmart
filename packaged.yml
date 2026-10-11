@@ -15,7 +15,8 @@ Parameters:
   S3BucketName:
     Type: String
     Default: athena-results-spendsmart-dev
-    Description: Must be globally unique.
+    Description: Data, Athena results, and CUR bucket (created by stack; deleted on
+      rollback when empty).
   BastionEnabled:
     Type: String
     AllowedValues:
@@ -61,6 +62,13 @@ Parameters:
     - InstallNew
     - LeaveExisting
     Default: LeaveExisting
+    Description: LeaveExisting deploys infra only; use helm-main.yml or Jenkinsfile.helm
+      for the chart.
+  SpendSmartValuesS3Uri:
+    Type: String
+    Default: ''
+    Description: Optional S3 URI to client-a-values.yaml. When empty, values are generated
+      from stack outputs.
 Rules:
   ExistingEksInputsRequired:
     RuleCondition:
@@ -126,6 +134,10 @@ Conditions:
     Fn::Equals:
     - Ref: SpendSmartWorkloadMode
     - InstallNew
+  InstallSpendSmartOnNewCluster:
+    Fn::And:
+    - Condition: InstallSpendSmart
+    - Condition: CreateNewEksCluster
   CreateBastion:
     Fn::And:
     - Condition: CreateNewEksCluster
@@ -157,8 +169,10 @@ Resources:
     Condition: CreateBastion
     DependsOn:
     - Network
+    - Eks
+    - Db
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/e9902e4cc3efd8844c76dcb3acc3de32.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/0066df9bdeb020c71b53ffd8616768ba.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix
@@ -184,13 +198,17 @@ Resources:
           Fn::GetAtt:
           - Network
           - Outputs.PublicSubnet1Id
+        PostgresSecretName:
+          Fn::Sub: ${NamePrefix}/postgres
+        ClickHouseSecretName:
+          Fn::Sub: ${NamePrefix}/clickhouse
   Eks:
     Type: AWS::CloudFormation::Stack
     Condition: CreateNewEksCluster
     DependsOn:
     - Network
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/bc27655976793564c8ac10dbed71728f.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/c04da2ab492204e3954594dcc7e2f28d.template
       Parameters:
         ProjectName: spendsmart
         NamePrefix:
@@ -209,34 +227,15 @@ Resources:
           Fn::GetAtt:
           - Network
           - Outputs.PrivateSubnet2Id
-        BastionSecurityGroupId:
-          Fn::If:
-          - CreateBastion
-          - Fn::GetAtt:
-            - Bastion
-            - Outputs.BastionSecurityGroupId
-          - ''
+        BastionSecurityGroupId: ''
   Db:
     Type: AWS::CloudFormation::Stack
-    Condition: CreateBastion
-    DependsOn:
-    - Eks
-    - Bastion
-    - BastionEksAccessEntry
+    Condition: CreateNewEksCluster
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/0fbce25b0118340928f09be9e2139ba1.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/3dbdca95a8845a7156e0a08d05ea2ef1.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix
-        ClusterName: spendsmart
-        BastionInstanceId:
-          Fn::GetAtt:
-          - Bastion
-          - Outputs.BastionInstanceId
-        BastionRoleName:
-          Fn::GetAtt:
-          - Bastion
-          - Outputs.BastionRoleName
   Alb:
     Type: AWS::CloudFormation::Stack
     Condition: CreateNewEksCluster
@@ -288,32 +287,75 @@ Resources:
           Fn::GetAtt:
           - Eks
           - Outputs.EksNodeGroup2Name
-  BastionEksAccessEntry:
-    Type: AWS::EKS::AccessEntry
+  BastionSshToEksNodes:
+    Type: AWS::EC2::SecurityGroupIngress
     Condition: CreateBastion
     DependsOn:
     - Eks
     - Bastion
     Properties:
-      ClusterName:
+      GroupId:
         Fn::GetAtt:
         - Eks
-        - Outputs.EksClusterName
-      PrincipalArn:
+        - Outputs.EksNodesSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId:
         Fn::GetAtt:
         - Bastion
-        - Outputs.BastionRoleArn
-      Type: STANDARD
-      AccessPolicies:
-      - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
-        AccessScope:
-          Type: cluster
+        - Outputs.BastionSecurityGroupId
+      Description: SSH from bastion to EKS worker nodes
+  BastionHttpsToEksApi:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CreateBastion
+    DependsOn:
+    - Eks
+    - Bastion
+    Properties:
+      GroupId:
+        Fn::GetAtt:
+        - Eks
+        - Outputs.EksClusterSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId:
+        Fn::GetAtt:
+        - Bastion
+        - Outputs.BastionSecurityGroupId
+      Description: HTTPS from bastion to EKS API
+  BastionHttpsToEksNodes:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CreateBastion
+    DependsOn:
+    - Eks
+    - Bastion
+    Properties:
+      GroupId:
+        Fn::GetAtt:
+        - Eks
+        - Outputs.EksNodesSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId:
+        Fn::GetAtt:
+        - Bastion
+        - Outputs.BastionSecurityGroupId
+      Description: HTTPS from bastion to worker nodes
   SpendSmart:
     Type: AWS::CloudFormation::Stack
-    Condition: InstallSpendSmart
+    Condition: InstallSpendSmartOnNewCluster
+    DependsOn:
+    - Alb
+    - Db
+    - Eks
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/1f46785436985ee89cc9cf97641d1d0b.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/3113544d853ebd36e62b819f275937ab.template
       Parameters:
+        NamePrefix:
+          Ref: NamePrefix
         ClusterName:
           Fn::If:
           - UseExistingEksCluster
@@ -350,10 +392,20 @@ Resources:
         ChartRepository: https://github.com/OT-CONTAINER-KIT/helm-charts.git
         ChartBranch: feature/spendsmart-helm-chart
         Namespace: spendsmart
+        AlbDnsName:
+          Fn::GetAtt:
+          - Alb
+          - Outputs.AlbDnsName
+        PostgresSecretName:
+          Fn::Sub: ${NamePrefix}/postgres
+        ClickHouseSecretName:
+          Fn::Sub: ${NamePrefix}/clickhouse
+        ValuesS3Uri:
+          Ref: SpendSmartValuesS3Uri
   S3:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/21c7c297ae23b7d3726609f2d3ba24ae.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/80958831a606ecf7d1712074bb8b00ba.template
       Parameters:
         ProjectName: spendsmart
         Environment: dev
@@ -516,53 +568,83 @@ Outputs:
       - Eks
       - Outputs.AlbControllerRoleArn
   SpendSmartDeploymentHostId:
-    Condition: InstallSpendSmart
+    Condition: InstallSpendSmartOnNewCluster
     Value:
       Fn::GetAtt:
       - SpendSmart
       - Outputs.DeploymentHostId
   SpendSmartNamespace:
-    Condition: InstallSpendSmart
+    Condition: InstallSpendSmartOnNewCluster
     Value:
       Fn::GetAtt:
       - SpendSmart
       - Outputs.Namespace
   SpendSmartIngressName:
-    Condition: InstallSpendSmart
+    Condition: InstallSpendSmartOnNewCluster
     Value:
       Fn::GetAtt:
       - SpendSmart
       - Outputs.IngressName
+  PostgresEndpoint:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Db
+      - Outputs.PostgresEndpoint
+  PostgresPort:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Db
+      - Outputs.PostgresPort
+  PostgresDatabase:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Db
+      - Outputs.PostgresDatabase
+  PostgresSecretArn:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Db
+      - Outputs.PostgresSecretArn
   ClickHouseEndpoint:
-    Condition: CreateBastion
+    Condition: CreateNewEksCluster
     Value:
       Fn::GetAtt:
       - Db
       - Outputs.ClickHouseEndpoint
   ClickHouseHttpPort:
-    Condition: CreateBastion
+    Condition: CreateNewEksCluster
     Value:
       Fn::GetAtt:
       - Db
       - Outputs.ClickHouseHttpPort
   ClickHouseNativePort:
-    Condition: CreateBastion
+    Condition: CreateNewEksCluster
     Value:
       Fn::GetAtt:
       - Db
       - Outputs.ClickHouseNativePort
   ClickHouseDatabase:
-    Condition: CreateBastion
+    Condition: CreateNewEksCluster
     Value:
       Fn::GetAtt:
       - Db
       - Outputs.ClickHouseDatabase
   ClickHouseSecretArn:
-    Condition: CreateBastion
+    Condition: CreateNewEksCluster
     Value:
       Fn::GetAtt:
       - Db
       - Outputs.ClickHouseSecretArn
+  AlbDnsName:
+    Condition: CreateNewEksCluster
+    Value:
+      Fn::GetAtt:
+      - Alb
+      - Outputs.AlbDnsName
   BucketName:
     Value:
       Fn::GetAtt:

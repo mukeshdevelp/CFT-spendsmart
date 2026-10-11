@@ -1,34 +1,30 @@
-  backend:
-    image: harbor.ldc.opstree.dev/coe/uniteconpro-backend-prod
-    tag: "latest"
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        cpu: 200m
-        memory: 512Mi
-  frontend:
-    image: harbor.ldc.opstree.dev/coe/uniteconpro-frontend-prod
-    tag: "latest" 
-    configMap:
-      data:
-        VITE_API_BASE_URL: "https://spendsmart-api.client-a.example"
-        VITE_CLOUD_SENTRY_API_BASE_URL: "https://cloud-sentry.client-a.example"
-        VITE_KEYCLOAK_CLIENT_ID: "uniteconpro"
-        VITE_KEYCLOAK_REALM: "client-a"
-        VITE_KEYCLOAK_URL: "https://keycloak.client-a.example"
-    nginx:
-      csp:  
-        connectSrc:
-          - "'self'"
-          - "https://keycloak.client-a.example"
-          - "https://cloud-sentry.client-a.example"
-          - "wss:"
-  cloudsentry:
-    image: 
-      tag: "10"
-  engine:
-    image:
-      tag: "latest"
-    schedule: "5 11,23 * * *"
+# Legacy reference — use client-a-values.yaml for Helm deploy.
+# Upload to S3 and pass SpendSmartValuesS3Uri, or let the stack generate values from AlbDnsName.
+
+backend:
+  image:
+    repository: harbor.ldc.opstree.dev/coe/uniteconpro-backend-prod
+    tag: latest
+  nodeSelector:
+    spendsmart.io/workload: backend
+
+frontend:
+  image:
+    repository: harbor.ldc.opstree.dev/coe/uniteconpro-frontend-prod
+    tag: latest
+  nodeSelector:
+    spendsmart.io/workload: frontend
+  service:
+    type: NodePort
+
+cloudsentry:
+  enabled: false
+
+engine:
+  enabled: true
+  image:
+    repository: harbor.ldc.opstree.dev/coe/uniteconpro-engine-dev
+    tag: latest
+  schedule: "5 11,23 * * *"
+  nodeSelector:
+    spendsmart.io/workload: backend

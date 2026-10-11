@@ -1,28 +1,36 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >-
-  ClickHouse as an EKS workload pinned to node group 2.
-  Credentials are stored in Secrets Manager and applied from the bastion.
+Description: Database credentials for in-cluster PostgreSQL and ClickHouse on node group 2.
 
 Parameters:
   NamePrefix:
     Type: String
 
-  ClusterName:
-    Type: String
-
-  BastionInstanceId:
-    Type: String
-
-  BastionRoleName:
-    Type: String
-
 Resources:
+  PostgresSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/postgres'
+      Description: SpendSmart PostgreSQL on node group 2
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"dbadmin","database":"cloudsentry"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\\''`$<>&;|'
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-postgres-secret'
+        - Key: Project
+          Value: spendsmart
+        - Key: Environment
+          Value: dev
+        - Key: ManagedBy
+          Value: CFT
 
   ClickHouseSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub '${NamePrefix}/clickhouse'
-      Description: SpendSmart ClickHouse user on node group 2
+      Description: SpendSmart ClickHouse on node group 2
       GenerateSecretString:
         SecretStringTemplate: '{"username":"default","database":"spendsmart"}'
         GenerateStringKey: password
@@ -38,421 +46,22 @@ Resources:
         - Key: ManagedBy
           Value: CFT
 
-  BastionSecretRead:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName: !Sub '${NamePrefix}-bastion-db-secrets'
-      Roles:
-        - !Ref BastionRoleName
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Action:
-              - secretsmanager:GetSecretValue
-            Resource:
-              - !Ref ClickHouseSecret
-
-  InstallerRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-
-      Policies:
-        - PolicyName: RunDatabaseInstall
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-
-              - Effect: Allow
-                Action:
-                  - ssm:SendCommand
-                Resource:
-                  - !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${BastionInstanceId}'
-                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript'
-
-              - Effect: Allow
-                Action:
-                  - ssm:GetCommandInvocation
-                  - ssm:ListCommands
-                Resource: '*'
-
-      Tags:
-        - Key: Name
-          Value: !Sub '${NamePrefix}-db-installer'
-        - Key: Project
-          Value: spendsmart
-        - Key: Environment
-          Value: dev
-        - Key: ManagedBy
-          Value: CFT
-
-  InstallerFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      Description: Applies ClickHouse onto EKS node group 2
-      Runtime: python3.12
-      Handler: index.handler
-      Timeout: 900
-      Role: !GetAtt InstallerRole.Arn
-
-      Tags:
-        - Key: Name
-          Value: !Sub '${NamePrefix}-db-installer'
-        - Key: Project
-          Value: spendsmart
-        - Key: Environment
-          Value: dev
-        - Key: ManagedBy
-          Value: CFT
-
-      Code:
-        ZipFile: |
-          import time
-          import boto3
-          import cfnresponse
-
-          ssm = boto3.client('ssm')
-
-          def handler(event, context):
-              p = event['ResourceProperties']
-              delete = event['RequestType'] == 'Delete'
-
-              cmd = p['DeleteCommand'] if delete else p['ApplyCommand']
-
-              try:
-                  resp = None
-
-                  for _ in range(30):
-                      try:
-                          resp = ssm.send_command(
-                              InstanceIds=[p['InstanceId']],
-                              DocumentName='AWS-RunShellScript',
-                              TimeoutSeconds=800,
-                              Parameters={
-                                  'commands': [cmd]
-                              }
-                          )
-                          break
-
-                      except Exception as exc:
-                          if 'InvalidInstanceId' not in str(exc):
-                              raise
-
-                          time.sleep(10)
-
-                  if not resp:
-                      raise Exception(
-                          'bastion is not registered with Systems Manager'
-                      )
-
-                  cid = resp['Command']['CommandId']
-
-                  for _ in range(80):
-                      time.sleep(10)
-
-                      inv = ssm.get_command_invocation(
-                          CommandId=cid,
-                          InstanceId=p['InstanceId']
-                      )
-
-                      status = inv['Status']
-
-                      if status == 'Success':
-                          cfnresponse.send(
-                              event,
-                              context,
-                              cfnresponse.SUCCESS,
-                              {'CommandId': cid}
-                          )
-                          return
-
-                      if status in (
-                          'Failed',
-                          'Cancelled',
-                          'TimedOut'
-                      ):
-                          err = (
-                              inv.get('StandardErrorContent')
-                              or inv.get('StandardOutputContent')
-                              or status
-                          )[:2000]
-
-                          result = (
-                              cfnresponse.SUCCESS
-                              if delete
-                              else cfnresponse.FAILED
-                          )
-
-                          cfnresponse.send(
-                              event,
-                              context,
-                              result,
-                              {'Error': err}
-                          )
-                          return
-
-                  cfnresponse.send(
-                      event,
-                      context,
-                      cfnresponse.FAILED,
-                      {
-                          'Error':
-                          'timed out waiting for database install'
-                      }
-                  )
-
-              except Exception as exc:
-                  if delete:
-                      cfnresponse.send(
-                          event,
-                          context,
-                          cfnresponse.SUCCESS,
-                          {}
-                      )
-                  else:
-                      cfnresponse.send(
-                          event,
-                          context,
-                          cfnresponse.FAILED,
-                          {
-                              'Error': str(exc)[:2000]
-                          }
-                      )
-
-  DatabaseInstall:
-    Type: Custom::DatabaseInstall
-    DependsOn: BastionSecretRead
-
-    Properties:
-      ServiceToken: !GetAtt InstallerFunction.Arn
-      InstanceId: !Ref BastionInstanceId
-
-      DeleteCommand: !Sub |
-        set +e
-        export HOME=/root
-        export KUBECONFIG=/root/.kube/config
-        mkdir -p /root/.kube
-
-        aws eks update-kubeconfig \
-          --region ${AWS::Region} \
-          --name ${ClusterName} \
-          --kubeconfig "$KUBECONFIG"
-
-        kubectl --kubeconfig "$KUBECONFIG" delete namespace databases --wait=false
-
-        exit 0
-
-      ApplyCommand: !Sub |
-        set -euo pipefail
-        export HOME=/root
-        export KUBECONFIG=/root/.kube/config
-        mkdir -p /root/.kube
-
-        if ! command -v kubectl >/dev/null 2>&1; then
-          curl -fsSL \
-            -o /usr/local/bin/kubectl \
-            https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl
-
-          chmod +x /usr/local/bin/kubectl
-        fi
-
-        aws eks update-kubeconfig \
-          --region ${AWS::Region} \
-          --name ${ClusterName} \
-          --kubeconfig "$KUBECONFIG"
-
-        ready=0
-
-        for _ in 1 2 3 4 5 6 7 8 9 10 \
-                 11 12 13 14 15 16 17 18 19 20 \
-                 21 22 23 24 25 26 27 28 29 30; do
-
-          if kubectl --kubeconfig "$KUBECONFIG" get nodes; then
-            ready=1
-            break
-          fi
-
-          sleep 10
-        done
-
-        test "$ready" = 1
-
-        CHPASS=$(aws secretsmanager get-secret-value \
-          --secret-id '${ClickHouseSecret}' \
-          --region ${AWS::Region} \
-          --query SecretString \
-          --output text |
-          python3 -c '
-          import json
-          import sys
-          print(json.load(sys.stdin)["password"])
-          ')
-
-        kubectl create namespace databases \
-          --dry-run=client \
-          -o yaml |
-          kubectl apply -f -
-
-        kubectl -n databases create secret generic clickhouse-auth \
-          --from-literal=username=default \
-          --from-literal=password="$CHPASS" \
-          --from-literal=database=spendsmart \
-          --dry-run=client \
-          -o yaml |
-          kubectl apply -f -
-
-        python3 - <<'PY'
-        import textwrap
-
-        open("/tmp/spendsmart-dbs.yaml", "w").write(
-            textwrap.dedent("""
-            apiVersion: apps/v1
-            kind: StatefulSet
-            metadata:
-              name: clickhouse
-              namespace: databases
-            spec:
-              serviceName: clickhouse
-              replicas: 1
-
-              selector:
-                matchLabels:
-                  app: clickhouse
-
-              template:
-                metadata:
-                  labels:
-                    app: clickhouse
-
-                spec:
-                  nodeSelector:
-                    spendsmart.io/role: data
-
-                  tolerations:
-                    - key: spendsmart.io/role
-                      operator: Equal
-                      value: data
-                      effect: NoSchedule
-
-                  initContainers:
-                    - name: prepare
-                      image: public.ecr.aws/docker/library/busybox:1.36
-                      command:
-                        - sh
-                        - -c
-                        - mkdir -p /data && chown -R 101:101 /data
-
-                      volumeMounts:
-                        - name: data
-                          mountPath: /data
-
-                  containers:
-                    - name: clickhouse
-                      image: clickhouse/clickhouse-server:24.8
-
-                      ports:
-                        - containerPort: 8123
-                        - containerPort: 9000
-
-                      env:
-                        - name: CLICKHOUSE_USER
-                          valueFrom:
-                            secretKeyRef:
-                              name: clickhouse-auth
-                              key: username
-
-                        - name: CLICKHOUSE_PASSWORD
-                          valueFrom:
-                            secretKeyRef:
-                              name: clickhouse-auth
-                              key: password
-
-                        - name: CLICKHOUSE_DB
-                          valueFrom:
-                            secretKeyRef:
-                              name: clickhouse-auth
-                              key: database
-
-                      readinessProbe:
-                        httpGet:
-                          path: /ping
-                          port: 8123
-
-                        initialDelaySeconds: 20
-                        periodSeconds: 10
-
-                      resources:
-                        requests:
-                          cpu: 500m
-                          memory: 1Gi
-
-                        limits:
-                          memory: 3Gi
-
-                      volumeMounts:
-                        - name: data
-                          mountPath: /var/lib/clickhouse
-
-                  volumes:
-                    - name: data
-                      hostPath:
-                        path: /var/lib/spendsmart/clickhouse
-                        type: DirectoryOrCreate
-
-            ---
-            apiVersion: v1
-            kind: Service
-
-            metadata:
-              name: clickhouse
-              namespace: databases
-
-            spec:
-              selector:
-                app: clickhouse
-
-              ports:
-                - name: http
-                  port: 8123
-                  targetPort: 8123
-
-                - name: native
-                  port: 9000
-                  targetPort: 9000
-            """)
-        )
-        PY
-
-        kubectl apply \
-          -f /tmp/spendsmart-dbs.yaml
-
-        kubectl -n databases rollout status \
-          statefulset/clickhouse \
-          --timeout=600s
-
 Outputs:
-
-  ClickHouseEndpoint:
-    Value: clickhouse.databases.svc.cluster.local
-
-  ClickHouseHttpPort:
-    Value: '8123'
-
-  ClickHouseNativePort:
-    Value: '9000'
-
-  ClickHouseDatabase:
-    Value: spendsmart
-
+  PostgresSecretArn:
+    Value: !Ref PostgresSecret
   ClickHouseSecretArn:
     Value: !Ref ClickHouseSecret
+  PostgresEndpoint:
+    Value: postgres.databases.svc.cluster.local
+  PostgresPort:
+    Value: '5432'
+  PostgresDatabase:
+    Value: cloudsentry
+  ClickHouseEndpoint:
+    Value: clickhouse.databases.svc.cluster.local
+  ClickHouseHttpPort:
+    Value: '8123'
+  ClickHouseNativePort:
+    Value: '9000'
+  ClickHouseDatabase:
+    Value: spendsmart
