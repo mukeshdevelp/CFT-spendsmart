@@ -45,17 +45,10 @@ if user and password:
     apply_yaml(yaml)
 
 apply_generic("encryption-key", {"ENCRYPTION_KEY": cfg.get("encryption_key") or ""})
-apply_generic("gemini-key", {"GEMINI_API_KEY": cfg.get("gemini_api_key") or ""})
-apply_generic("base-url", {"BASE_URL": cfg.get("base_url") or ""})
-ak = (cfg.get("aws_access_key_id") or "").strip()
-sk = cfg.get("aws_secret_access_key") or ""
-if ak and sk:
-    apply_generic("aws-access", {"AWS_ACCESS_KEY_ID": ak, "AWS_SECRET_ACCESS_KEY": sk})
 
 for key, secret_name in [
     ("clickhouse", "clickhouse"),
     ("clickhouse_db", "clickhouse-db"),
-    ("postgres_config", "postgres-config"),
 ]:
     block = cfg.get(key) or {}
     if block:

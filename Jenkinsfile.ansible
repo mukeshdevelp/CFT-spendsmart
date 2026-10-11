@@ -40,18 +40,13 @@ pipeline {
     )
     booleanParam(
       name: 'DEPLOY_KEYCLOAK',
-      defaultValue: true,
-      description: 'Deploy Keycloak before Helm chart'
-    )
-    booleanParam(
-      name: 'CONFIGURE_KEYCLOAK_REALM',
-      defaultValue: true,
-      description: 'Create Keycloak realm and OIDC client'
+      defaultValue: false,
+      description: 'Not in local deploy guide; leave false unless you add Keycloak later'
     )
     booleanParam(
       name: 'INSTALL_ALB_CONTROLLER',
       defaultValue: false,
-      description: 'Install AWS Load Balancer Controller (once per cluster)'
+      description: 'Optional; not in local deploy guide'
     )
     booleanParam(
       name: 'HELM_WAIT',
@@ -62,11 +57,6 @@ pipeline {
       name: 'HELM_TIMEOUT',
       defaultValue: '25m',
       description: 'Helm timeout'
-    )
-    booleanParam(
-      name: 'APPLY_CLOUDSENTRY_SECRETS',
-      defaultValue: false,
-      description: 'Apply optional Cloud-Sentry K8s secrets from Jenkins'
     )
     string(
       name: 'CREDENTIAL_AWS',
@@ -87,31 +77,6 @@ pipeline {
       name: 'CREDENTIAL_ENCRYPTION_KEY',
       defaultValue: 'spendsmart-encryption-key',
       description: 'Secret text: encryption-key'
-    )
-    string(
-      name: 'CREDENTIAL_KEYCLOAK_ADMIN',
-      defaultValue: 'spendsmart-keycloak-admin',
-      description: 'Secret text: Keycloak admin password'
-    )
-    string(
-      name: 'KEYCLOAK_ADMIN_USER',
-      defaultValue: 'admin',
-      description: 'Keycloak admin username'
-    )
-    string(
-      name: 'CREDENTIAL_GEMINI_KEY',
-      defaultValue: 'spendsmart-gemini-key',
-      description: 'Optional; used when APPLY_CLOUDSENTRY_SECRETS=true'
-    )
-    string(
-      name: 'CREDENTIAL_BASE_URL',
-      defaultValue: 'spendsmart-base-url',
-      description: 'Optional; used when APPLY_CLOUDSENTRY_SECRETS=true'
-    )
-    string(
-      name: 'CREDENTIAL_APP_AWS',
-      defaultValue: 'spendsmart-app-aws',
-      description: 'Optional; used when APPLY_CLOUDSENTRY_SECRETS=true'
     )
   }
 
@@ -188,14 +153,12 @@ aws_region: ${params.AWS_REGION}
 cfn_stack_name: ${params.CFN_STACK_NAME}
 name_prefix: ${params.NAME_PREFIX}
 k8s_namespace: ${params.K8S_NAMESPACE}
-keycloak_admin_user: ${params.KEYCLOAK_ADMIN_USER}
 wait_for_cluster: ${params.WAIT_FOR_CLUSTER}
 deploy_keycloak: ${params.DEPLOY_KEYCLOAK}
-configure_keycloak_realm: ${params.CONFIGURE_KEYCLOAK_REALM}
 install_alb_controller: ${params.INSTALL_ALB_CONTROLLER}
 helm_wait: ${params.HELM_WAIT}
 helm_timeout: ${params.HELM_TIMEOUT}
-apply_cloudsentry_secrets: ${params.APPLY_CLOUDSENTRY_SECRETS}
+inject_cfn_urls: false
 """
           def bindings = []
           bindings << usernamePassword(
@@ -205,24 +168,6 @@ apply_cloudsentry_secrets: ${params.APPLY_CLOUDSENTRY_SECRETS}
           )
           if (params.CREDENTIAL_ENCRYPTION_KEY?.trim()) {
             bindings << string(credentialsId: params.CREDENTIAL_ENCRYPTION_KEY.trim(), variable: 'ENCRYPTION_KEY')
-          }
-          if (params.DEPLOY_KEYCLOAK && params.CREDENTIAL_KEYCLOAK_ADMIN?.trim()) {
-            bindings << string(credentialsId: params.CREDENTIAL_KEYCLOAK_ADMIN.trim(), variable: 'KEYCLOAK_ADMIN_PASSWORD')
-          }
-          if (params.APPLY_CLOUDSENTRY_SECRETS) {
-            if (params.CREDENTIAL_GEMINI_KEY?.trim()) {
-              bindings << string(credentialsId: params.CREDENTIAL_GEMINI_KEY.trim(), variable: 'GEMINI_API_KEY')
-            }
-            if (params.CREDENTIAL_BASE_URL?.trim()) {
-              bindings << string(credentialsId: params.CREDENTIAL_BASE_URL.trim(), variable: 'BASE_URL')
-            }
-            if (params.CREDENTIAL_APP_AWS?.trim()) {
-              bindings << usernamePassword(
-                credentialsId: params.CREDENTIAL_APP_AWS.trim(),
-                usernameVariable: 'APP_AWS_ACCESS_KEY_ID',
-                passwordVariable: 'APP_AWS_SECRET_ACCESS_KEY',
-              )
-            }
           }
           bindings << sshUserPrivateKey(
             credentialsId: params.CREDENTIAL_BASTION_SSH.trim(),

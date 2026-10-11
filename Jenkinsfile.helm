@@ -80,13 +80,13 @@ pipeline {
     )
     booleanParam(
       name: 'DEPLOY_KEYCLOAK',
-      defaultValue: true,
-      description: 'Deploy Keycloak Deployment/Service before Helm chart'
+      defaultValue: false,
+      description: 'Not in local Harbor deploy guide; leave false unless Keycloak is added'
     )
     booleanParam(
       name: 'CONFIGURE_KEYCLOAK_REALM',
-      defaultValue: true,
-      description: 'Create realm + public client with ALB redirect URIs'
+      defaultValue: false,
+      description: 'Only when DEPLOY_KEYCLOAK=true'
     )
     booleanParam(
       name: 'INSTALL_ALB_CONTROLLER',
@@ -99,9 +99,9 @@ pipeline {
       description: 'Pass --wait=false to helm upgrade'
     )
     booleanParam(
-      name: 'APPLY_CLOUDSENTRY_SECRETS',
+      name: 'INJECT_CFN_URLS',
       defaultValue: false,
-      description: 'Bind gemini/base-url/aws-access Jenkins creds (cloudsentry.enabled is false in client-a-values)'
+      description: 'If true, fill VITE URLs from stack AlbDnsName; false = client-a-values.yaml as in local guide step 16'
     )
     string(
       name: 'CREDENTIAL_AWS',
@@ -269,20 +269,28 @@ pipeline {
     stage('Prepare Helm values') {
       steps {
         script {
-          withAwsCredentials {
+          if (params.INJECT_CFN_URLS) {
+            withAwsCredentials {
+              sh '''
+              set -eu
+              export KEYCLOAK_REALM="${KEYCLOAK_REALM}"
+              export KEYCLOAK_CLIENT_ID="${KEYCLOAK_CLIENT_ID}"
+              export KEYCLOAK_BROWSER_URL="${KEYCLOAK_BROWSER_URL}"
+              python3 scripts/prepare-helm-values.py \
+                --base-values client-a-values.yaml \
+                --out "${HELM_VALUES_RENDERED}" \
+                --context-out "${HELM_DEPLOY_CONTEXT}" \
+                --namespace "${K8S_NAMESPACE}" \
+                --stack-name "${CFN_STACK_NAME}" \
+                --region "${AWS_REGION}" \
+                --keycloak-url "${KEYCLOAK_URL}"
+              '''
+            }
+          } else {
             sh '''
             set -eu
-            export KEYCLOAK_REALM="${KEYCLOAK_REALM}"
-            export KEYCLOAK_CLIENT_ID="${KEYCLOAK_CLIENT_ID}"
-            export KEYCLOAK_BROWSER_URL="${KEYCLOAK_BROWSER_URL}"
-            python3 scripts/prepare-helm-values.py \
-              --base-values client-a-values.yaml \
-              --out "${HELM_VALUES_RENDERED}" \
-              --context-out "${HELM_DEPLOY_CONTEXT}" \
-              --namespace "${K8S_NAMESPACE}" \
-              --stack-name "${CFN_STACK_NAME}" \
-              --region "${AWS_REGION}" \
-              --keycloak-url "${KEYCLOAK_URL}"
+            cp client-a-values.yaml "${HELM_VALUES_RENDERED}"
+            echo "export FRONTEND_BASE_URL=" > "${HELM_DEPLOY_CONTEXT}"
             '''
           }
         }
@@ -307,21 +315,6 @@ pipeline {
           if (params.DEPLOY_KEYCLOAK && params.CREDENTIAL_KEYCLOAK_ADMIN?.trim()) {
             bindings << string(credentialsId: params.CREDENTIAL_KEYCLOAK_ADMIN.trim(), variable: 'KEYCLOAK_ADMIN_PASSWORD')
           }
-          if (params.APPLY_CLOUDSENTRY_SECRETS) {
-            if (params.CREDENTIAL_GEMINI_KEY?.trim()) {
-              bindings << string(credentialsId: params.CREDENTIAL_GEMINI_KEY.trim(), variable: 'GEMINI_API_KEY')
-            }
-            if (params.CREDENTIAL_BASE_URL?.trim()) {
-              bindings << string(credentialsId: params.CREDENTIAL_BASE_URL.trim(), variable: 'BASE_URL')
-            }
-            if (params.CREDENTIAL_APP_AWS?.trim()) {
-              bindings << usernamePassword(
-                credentialsId: params.CREDENTIAL_APP_AWS.trim(),
-                usernameVariable: 'APP_AWS_ACCESS_KEY_ID',
-                passwordVariable: 'APP_AWS_SECRET_ACCESS_KEY',
-              )
-            }
-          }
           if (bindings.isEmpty()) {
             error('At least CREDENTIAL_HARBOR must be set')
           }
@@ -331,8 +324,8 @@ pipeline {
               set -eu
               export HARBOR_DOCKER_SERVER="${HARBOR_DOCKER_SERVER}"
               export K8S_NAMESPACE="${K8S_NAMESPACE}"
-              export KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN_USER}"
               export CLICKHOUSE_TABLE="${CLICKHOUSE_TABLE}"
+              export CLICKHOUSE_PORT=8123
               python3 scripts/build-runtime-secrets-json.py \
                 --out "${RUNTIME_SECRETS_JSON}" \
                 --region "${AWS_REGION}" \

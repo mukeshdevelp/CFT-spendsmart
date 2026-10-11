@@ -1,5 +1,5 @@
 ---
-# Align with Jenkinsfile.helm defaults. Override secrets via ansible-vault or -e @secrets.yml (gitignored).
+# App deploy — Harbor local guide steps 5–6, 12–14, 16–19 (no Minikube ClickHouse install).
 
 aws_region: us-east-1
 cfn_stack_name: spendsmart-dev
@@ -19,40 +19,30 @@ helm_wait: true
 client_values_file: "{{ playbook_dir }}/../../client-a-values.yaml"
 rendered_values_file: /tmp/spendsmart-helm-values.yaml
 
-clickhouse_table: service_costs
+# EKS ClickHouse (infra bootstrap in `databases` ns) — same secret *keys* as local guide, different host/DB user.
 clickhouse_host: clickhouse.databases.svc.cluster.local
-clickhouse_port: "9000"
+clickhouse_port: "8123"
 clickhouse_user: default
 clickhouse_database: spendsmart
-
-postgres_host: postgres.databases.svc.cluster.local
-postgres_port: "5432"
-postgres_user: dbadmin
-postgres_database: cloudsentry
+clickhouse_table: service_costs
 
 harbor_docker_server: harbor.ldc.opstree.dev
-# Required for image pull (set via vault or -e):
 harbor_docker_username: ""
 harbor_docker_password: ""
 
 encryption_key: ""
+
+# Optional later: set true to fill VITE_API_BASE_URL from stack AlbDnsName
+inject_cfn_urls: false
+keycloak_browser_url: ""
+cloudsentry_url: ""
+
+deploy_keycloak: false
+configure_keycloak_realm: false
 keycloak_admin_user: admin
 keycloak_admin_password: ""
 
 apply_cloudsentry_secrets: false
-gemini_api_key: ""
-base_url: ""
-app_aws_access_key_id: ""
-app_aws_secret_access_key: ""
-
-deploy_keycloak: true
-configure_keycloak_realm: true
-keycloak_image: quay.io/keycloak/keycloak:25.0
-keycloak_realm: spendsmart
-keycloak_client_id: spendsmart-frontend
-keycloak_url: auto
-keycloak_browser_url: ""
-cloudsentry_url: ""
 
 wait_for_cluster: true
 min_nodes: 4

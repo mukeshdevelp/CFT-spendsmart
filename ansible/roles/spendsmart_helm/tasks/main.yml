@@ -6,15 +6,14 @@
   register: secrets_include
   failed_when: false
 
-- name: Require application secrets
+- name: Require application secrets (guide steps 6, 12–14)
   ansible.builtin.assert:
     that:
       - harbor_docker_username | length > 0
       - harbor_docker_password | length > 0
       - encryption_key | length > 0
-      - (not deploy_keycloak) or (keycloak_admin_password | length > 0)
     fail_msg: >-
-      Set harbor_docker_username, harbor_docker_password, encryption_key, and keycloak_admin_password
+      Set harbor_docker_username, harbor_docker_password, and encryption_key
       (see group_vars/secrets.yml.example).
 
 - name: Wait for cluster and database pods

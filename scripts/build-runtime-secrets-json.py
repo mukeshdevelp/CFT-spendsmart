@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build jenkins-runtime-secrets.json for bastion-apply-chart-secrets.sh (Jenkins agent)."""
+"""Build jenkins-runtime-secrets.json — Harbor guide parity (steps 6, 12–14 only)."""
 from __future__ import annotations
 
 import argparse
@@ -7,6 +7,13 @@ import json
 import os
 import subprocess
 import sys
+
+# EKS: ClickHouse runs in namespace `databases` (infra bootstrap), not Minikube step 7–11.
+CH_HOST = os.environ.get("CLICKHOUSE_HOST", "clickhouse.databases.svc.cluster.local")
+CH_PORT = os.environ.get("CLICKHOUSE_PORT", "8123")
+CH_USER = os.environ.get("CLICKHOUSE_USER", "default")
+CH_DATABASE = os.environ.get("CLICKHOUSE_DATABASE", "spendsmart")
+CH_TABLE = os.environ.get("CLICKHOUSE_TABLE", "service_costs")
 
 
 def sm_password(secret_id: str, region: str) -> str:
@@ -37,14 +44,11 @@ def main() -> None:
     parser.add_argument("--namespace", default="spendsmart")
     args = parser.parse_args()
 
-    pg_secret = f"{args.name_prefix}/postgres"
     ch_secret = f"{args.name_prefix}/clickhouse"
-
     try:
-        pg_pass = sm_password(pg_secret, args.region)
         ch_pass = sm_password(ch_secret, args.region)
     except Exception as e:
-        print(f"Failed to read Secrets Manager DB passwords: {e}", file=sys.stderr)
+        print(f"Failed to read Secrets Manager ClickHouse password: {e}", file=sys.stderr)
         sys.exit(1)
 
     cfg = {
@@ -53,33 +57,22 @@ def main() -> None:
         "harbor_docker_username": os.environ.get("HARBOR_DOCKER_USERNAME", ""),
         "harbor_docker_password": os.environ.get("HARBOR_DOCKER_PASSWORD", ""),
         "encryption_key": os.environ.get("ENCRYPTION_KEY", ""),
-        "gemini_api_key": os.environ.get("GEMINI_API_KEY", ""),
-        "base_url": os.environ.get("BASE_URL", ""),
-        "aws_access_key_id": os.environ.get("APP_AWS_ACCESS_KEY_ID", ""),
-        "aws_secret_access_key": os.environ.get("APP_AWS_SECRET_ACCESS_KEY", ""),
-        "keycloak_admin": os.environ.get("KEYCLOAK_ADMIN", "admin"),
-        "keycloak_admin_password": os.environ.get("KEYCLOAK_ADMIN_PASSWORD", ""),
         "clickhouse": {
-            "CLICKHOUSE_HOST": "clickhouse.databases.svc.cluster.local",
-            "CLICKHOUSE_PORT": "9000",
-            "CLICKHOUSE_USER": "default",
+            "CLICKHOUSE_HOST": CH_HOST,
+            "CLICKHOUSE_PORT": CH_PORT,
+            "CLICKHOUSE_USER": CH_USER,
             "CLICKHOUSE_PASSWORD": ch_pass,
-            "CLICKHOUSE_DATABASE": "spendsmart",
+            "CLICKHOUSE_DATABASE": CH_DATABASE,
+            "CLICKHOUSE_TABLE": CH_TABLE,
+            "CLICKHOUSE_TLS": "false",
         },
         "clickhouse_db": {
-            "CLICKHOUSE_HOST": "clickhouse.databases.svc.cluster.local",
-            "CLICKHOUSE_PORT": "9000",
-            "CLICKHOUSE_USER": "default",
+            "CLICKHOUSE_HOST": CH_HOST,
+            "CLICKHOUSE_PORT": CH_PORT,
+            "CLICKHOUSE_USER": CH_USER,
             "CLICKHOUSE_PASSWORD": ch_pass,
-            "CLICKHOUSE_DATABASE": "spendsmart",
-            "CLICKHOUSE_TABLE": os.environ.get("CLICKHOUSE_TABLE", "service_costs"),
-        },
-        "postgres_config": {
-            "POSTGRES_HOST": "postgres.databases.svc.cluster.local",
-            "POSTGRES_PORT": "5432",
-            "POSTGRES_USER": "dbadmin",
-            "POSTGRES_PASSWORD": pg_pass,
-            "POSTGRES_DB": "cloudsentry",
+            "CLICKHOUSE_DATABASE": CH_DATABASE,
+            "CLICKHOUSE_TABLE": CH_TABLE,
         },
     }
 

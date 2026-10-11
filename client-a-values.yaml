@@ -1,5 +1,6 @@
-# Helm values for OT-CONTAINER-KIT spendsmart chart (client-a).
-# Non-secret URLs are overridden at deploy time from CloudFormation outputs.
+# SpendSmart Helm values (OT-CONTAINER-KIT chart). Matches local client-a-file.yml layout.
+# Images: harbor.ldc.opstree.dev — EKS pulls via harbor-ldc-coe-regcred (pipeline step 6).
+# Optional: set VITE_* URLs when Keycloak/ALB are ready; empty strings match local guide step 16.
 
 backend:
   image:
@@ -25,21 +26,18 @@ frontend:
     type: NodePort
   configMap:
     data:
-      VITE_API_BASE_URL: PLACEHOLDER_API_URL
-      VITE_CLOUD_SENTRY_API_BASE_URL: PLACEHOLDER_CLOUDSENTRY_URL
-      VITE_KEYCLOAK_CLIENT_ID: spendsmart-frontend
-      VITE_KEYCLOAK_REALM: spendsmart
-      VITE_KEYCLOAK_URL: PLACEHOLDER_KEYCLOAK_URL
+      VITE_API_BASE_URL: ""
+      VITE_CLOUD_SENTRY_API_BASE_URL: ""
+      VITE_KEYCLOAK_CLIENT_ID: ""
+      VITE_KEYCLOAK_REALM: ""
+      VITE_KEYCLOAK_URL: ""
   nginx:
     csp:
       connectSrc:
         - "'self'"
-        - PLACEHOLDER_KEYCLOAK_URL
-        - PLACEHOLDER_CLOUDSENTRY_URL
         - "wss:"
       frameSrc:
         - "'self'"
-        - PLACEHOLDER_KEYCLOAK_URL
         - "https:"
 
 cloudsentry:
