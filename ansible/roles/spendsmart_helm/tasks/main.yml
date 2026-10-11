@@ -1,0 +1,42 @@
+---
+- name: Load optional secrets vars file
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir }}/../group_vars/secrets.yml"
+  ignore_errors: true
+  register: secrets_include
+  failed_when: false
+
+- name: Require application secrets
+  ansible.builtin.assert:
+    that:
+      - harbor_docker_username | length > 0
+      - harbor_docker_password | length > 0
+      - encryption_key | length > 0
+      - (not deploy_keycloak) or (keycloak_admin_password | length > 0)
+    fail_msg: >-
+      Set harbor_docker_username, harbor_docker_password, encryption_key, and keycloak_admin_password
+      (see group_vars/secrets.yml.example).
+
+- name: Wait for cluster and database pods
+  ansible.builtin.import_tasks: preflight.yml
+
+- name: Write rendered Helm values on bastion
+  ansible.builtin.import_tasks: prepare_values.yml
+
+- name: Apply Kubernetes secrets for the chart
+  ansible.builtin.import_tasks: secrets.yml
+
+- name: Deploy Keycloak
+  ansible.builtin.import_tasks: keycloak.yml
+  when: deploy_keycloak | bool
+
+- name: Bootstrap Keycloak realm and OIDC client
+  ansible.builtin.import_tasks: keycloak_realm.yml
+  when: deploy_keycloak | bool and configure_keycloak_realm | bool and frontend_base_url | length > 0
+
+- name: Install SpendSmart Helm chart
+  ansible.builtin.import_tasks: helm.yml
+
+- name: Optional ALB controller
+  ansible.builtin.import_tasks: alb_controller.yml
+  when: install_alb_controller | bool

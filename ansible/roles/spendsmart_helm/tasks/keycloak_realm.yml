@@ -1,0 +1,121 @@
+---
+- name: Start Keycloak admin API port-forward
+  ansible.builtin.command:
+    cmd: kubectl port-forward svc/keycloak 18080:8080 -n {{ k8s_namespace }}
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  async: 3600
+  poll: 0
+  register: keycloak_pf
+
+- name: Wait for port-forward
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: Wait for Keycloak HTTP
+  ansible.builtin.uri:
+    url: http://127.0.0.1:18080/realms/master
+    status_code: 200
+  register: kc_up
+  until: kc_up.status == 200
+  retries: 30
+  delay: 5
+
+- name: Obtain Keycloak admin token
+  ansible.builtin.uri:
+    url: http://127.0.0.1:18080/realms/master/protocol/openid-connect/token
+    method: POST
+    body_format: form-urlencoded
+    body:
+      client_id: admin-cli
+      username: "{{ keycloak_admin_user }}"
+      password: "{{ keycloak_admin_password }}"
+      grant_type: password
+    status_code: 200
+  register: kc_token
+  no_log: true
+
+- name: Set admin access token
+  ansible.builtin.set_fact:
+    kc_access_token: "{{ kc_token.json.access_token }}"
+  no_log: true
+
+- name: Check if realm exists
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:18080/admin/realms/{{ keycloak_realm }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ kc_access_token }}"
+    status_code: [200, 404]
+  register: realm_get
+
+- name: Create realm
+  ansible.builtin.uri:
+    url: http://127.0.0.1:18080/admin/realms
+    method: POST
+    headers:
+      Authorization: "Bearer {{ kc_access_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      realm: "{{ keycloak_realm }}"
+      enabled: true
+    status_code: [201, 409]
+  when: realm_get.status == 404
+
+- name: List OIDC clients
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:18080/admin/realms/{{ keycloak_realm }}/clients?clientId={{ keycloak_client_id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ kc_access_token }}"
+    status_code: 200
+  register: client_list
+
+- name: Build public client body
+  ansible.builtin.set_fact:
+    oidc_client_body:
+      clientId: "{{ keycloak_client_id }}"
+      name: "{{ keycloak_client_id }}"
+      enabled: true
+      publicClient: true
+      standardFlowEnabled: true
+      directAccessGrantsEnabled: true
+      redirectUris:
+        - "{{ frontend_base_url }}/"
+        - "{{ frontend_base_url }}/*"
+      webOrigins:
+        - "{{ frontend_base_url }}"
+        - "+"
+      attributes:
+        post.logout.redirect.uris: "+"
+
+- name: Create OIDC client
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:18080/admin/realms/{{ keycloak_realm }}/clients"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ kc_access_token }}"
+      Content-Type: application/json
+    body_format: json
+    body: "{{ oidc_client_body }}"
+    status_code: [201, 409]
+  when: client_list.json | length == 0
+
+- name: Update OIDC client
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:18080/admin/realms/{{ keycloak_realm }}/clients/{{ client_list.json[0].id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ kc_access_token }}"
+      Content-Type: application/json
+    body_format: json
+    body: "{{ oidc_client_body }}"
+    status_code: [204, 200]
+  when: client_list.json | length > 0
+
+- name: Stop Keycloak port-forward
+  ansible.builtin.async_status:
+    jid: "{{ keycloak_pf.ansible_job_id }}"
+    mode: kill
+  when: keycloak_pf.ansible_job_id is defined

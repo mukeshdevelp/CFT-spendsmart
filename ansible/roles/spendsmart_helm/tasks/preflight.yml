@@ -1,0 +1,26 @@
+---
+- name: Wait for EKS nodes and database pods
+  when: wait_for_cluster | bool
+  block:
+    - name: Poll cluster readiness
+      ansible.builtin.command:
+        cmd: kubectl get nodes --no-headers
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: nodes_out
+      until: (nodes_out.stdout_lines | length) >= (min_nodes | int)
+      retries: 60
+      delay: 20
+      changed_when: false
+
+    - name: Poll database pods
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get pods -n databases --no-headers 2>/dev/null | grep -c Running || true
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: db_pods
+      until: (db_pods.stdout | trim | int) >= (min_database_pods_running | int)
+      retries: 60
+      delay: 20
+      changed_when: false

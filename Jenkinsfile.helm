@@ -11,100 +11,174 @@ pipeline {
     choice(
       name: 'AWS_REGION',
       choices: ['us-east-1', 'ap-south-1'],
-      description: 'AWS region'
+      description: 'Stack region. Use us-east-1 for CUR and this template set (default).'
     )
     string(
       name: 'CFN_STACK_NAME',
       defaultValue: 'spendsmart-dev',
-      description: 'Infra stack name (must be CREATE_COMPLETE)'
-    )
-    string(
-      name: 'HELM_STACK_NAME',
-      defaultValue: 'spendsmart-dev-helm',
-      description: 'CloudFormation stack for helm-main.yml'
+      description: 'Infra stack name (CREATE_COMPLETE / UPDATE_COMPLETE)'
     )
     string(
       name: 'CFN_TEMPLATE_BUCKET',
-      defaultValue: '',
-      description: 'S3 bucket for packaged templates and bastion-assets'
+      defaultValue: 'spendsmart-cfn-packages',
+      description: 'S3 bucket for packaged templates, bastion-assets, and transient deploy files'
     )
     string(
       name: 'NAME_PREFIX',
       defaultValue: 'spendsmart-dev',
-      description: 'NamePrefix for Helm parameters and Secrets Manager paths'
+      description: 'Secrets Manager prefix ({prefix}/postgres, {prefix}/clickhouse)'
     )
     string(
-      name: 'SPENDSMART_VALUES_S3_URI',
+      name: 'K8S_NAMESPACE',
+      defaultValue: 'spendsmart',
+      description: 'Helm release namespace'
+    )
+    string(
+      name: 'CHART_REPO',
+      defaultValue: 'https://github.com/OT-CONTAINER-KIT/helm-charts.git',
+      description: 'SpendSmart Helm chart Git repository'
+    )
+    string(
+      name: 'CHART_BRANCH',
+      defaultValue: 'feature/spendsmart-helm-chart',
+      description: 'Branch containing charts/spendsmart'
+    )
+    string(
+      name: 'HELM_RELEASE',
+      defaultValue: 'spendsmart',
+      description: 'Helm release name'
+    )
+    string(
+      name: 'HELM_TIMEOUT',
+      defaultValue: '25m',
+      description: 'helm upgrade --timeout (when SKIP_HELM_WAIT is false)'
+    )
+    string(
+      name: 'CLICKHOUSE_TABLE',
+      defaultValue: 'service_costs',
+      description: 'Engine secret CLICKHOUSE_TABLE (clickhouse-db)'
+    )
+    string(
+      name: 'KEYCLOAK_URL',
+      defaultValue: 'auto',
+      description: 'Fallback Keycloak URL if KEYCLOAK_BROWSER_URL empty; auto = in-cluster Service DNS'
+    )
+    string(
+      name: 'KEYCLOAK_BROWSER_URL',
       defaultValue: '',
-      description: 'Optional; default s3://<bucket>/client-a-values.yaml when upload enabled'
+      description: 'VITE_KEYCLOAK_URL for browsers (e.g. http://<AlbDnsName>:8080 or public Keycloak host). Empty = in-cluster URL'
+    )
+    string(
+      name: 'KEYCLOAK_REALM',
+      defaultValue: 'spendsmart',
+      description: 'Keycloak realm (must match client-a-values VITE_KEYCLOAK_REALM)'
+    )
+    string(
+      name: 'KEYCLOAK_CLIENT_ID',
+      defaultValue: 'spendsmart-frontend',
+      description: 'OIDC client for frontend (VITE_KEYCLOAK_CLIENT_ID)'
     )
     booleanParam(
-      name: 'UPLOAD_CLIENT_VALUES',
+      name: 'DEPLOY_KEYCLOAK',
       defaultValue: true,
-      description: 'Upload client-a-values.yaml before Helm deploy'
+      description: 'Deploy Keycloak Deployment/Service before Helm chart'
     )
     booleanParam(
-      name: 'WAIT_FOR_HELM_STACK',
+      name: 'CONFIGURE_KEYCLOAK_REALM',
       defaultValue: true,
-      description: 'Wait for Helm CloudFormation stack'
+      description: 'Create realm + public client with ALB redirect URIs'
     )
-    choice(
+    booleanParam(
       name: 'INSTALL_ALB_CONTROLLER',
-      choices: ['true', 'false'],
-      description: 'Install AWS Load Balancer Controller in Helm stack'
+      defaultValue: false,
+      description: 'Install/upgrade AWS Load Balancer Controller on cluster (once per cluster)'
+    )
+    booleanParam(
+      name: 'SKIP_HELM_WAIT',
+      defaultValue: false,
+      description: 'Pass --wait=false to helm upgrade'
+    )
+    booleanParam(
+      name: 'APPLY_CLOUDSENTRY_SECRETS',
+      defaultValue: false,
+      description: 'Bind gemini/base-url/aws-access Jenkins creds (cloudsentry.enabled is false in client-a-values)'
+    )
+    string(
+      name: 'CREDENTIAL_AWS',
+      defaultValue: 'aws-creds',
+      description: 'Jenkins AWS credentials ID (SSM, S3, Secrets Manager)'
+    )
+    string(
+      name: 'CREDENTIAL_HARBOR',
+      defaultValue: 'harbor-creds',
+      description: 'Jenkins username/password for Harbor (Username with password)'
+    )
+    string(
+      name: 'CREDENTIAL_ENCRYPTION_KEY',
+      defaultValue: 'spendsmart-encryption-key',
+      description: 'Jenkins Secret text for encryption-key K8s secret (leave empty ID to skip)'
+    )
+    string(
+      name: 'CREDENTIAL_KEYCLOAK_ADMIN',
+      defaultValue: 'spendsmart-keycloak-admin',
+      description: 'Jenkins Secret text: Keycloak KEYCLOAK_ADMIN_PASSWORD (required if DEPLOY_KEYCLOAK)'
+    )
+    string(
+      name: 'KEYCLOAK_ADMIN_USER',
+      defaultValue: 'admin',
+      description: 'Keycloak bootstrap admin username'
+    )
+    string(
+      name: 'KEYCLOAK_IMAGE',
+      defaultValue: 'quay.io/keycloak/keycloak:25.0',
+      description: 'Keycloak container image (matches modules/spendsmart CFN path)'
+    )
+    string(
+      name: 'CREDENTIAL_GEMINI_KEY',
+      defaultValue: 'spendsmart-gemini-key',
+      description: 'Secret text for gemini-key; clear ID if Cloud-Sentry disabled and cred not created'
+    )
+    string(
+      name: 'CREDENTIAL_BASE_URL',
+      defaultValue: 'spendsmart-base-url',
+      description: 'Secret text for base-url; clear ID if unused'
+    )
+    string(
+      name: 'CREDENTIAL_APP_AWS',
+      defaultValue: 'spendsmart-app-aws',
+      description: 'Username/password for aws-access K8s secret; clear ID if unused'
     )
     string(
       name: 'HARBOR_DOCKER_SERVER',
       defaultValue: 'harbor.ldc.opstree.dev',
-      description: 'Harbor registry host'
-    )
-    string(
-      name: 'HARBOR_DOCKER_USERNAME',
-      defaultValue: '',
-      description: 'Harbor user or robot'
-    )
-    password(
-      name: 'HARBOR_DOCKER_PASSWORD',
-      defaultValue: '',
-      description: 'Harbor password or token'
-    )
-    password(
-      name: 'ENCRYPTION_KEY',
-      defaultValue: '',
-      description: 'Optional encryption-key secret'
-    )
-    password(
-      name: 'GEMINI_API_KEY',
-      defaultValue: '',
-      description: 'Optional gemini-key secret'
-    )
-    string(
-      name: 'BASE_URL',
-      defaultValue: '',
-      description: 'Optional base-url secret'
-    )
-    string(
-      name: 'APP_AWS_ACCESS_KEY_ID',
-      defaultValue: '',
-      description: 'Optional aws-access K8s secret (not Jenkins AWS creds)'
-    )
-    password(
-      name: 'APP_AWS_SECRET_ACCESS_KEY',
-      defaultValue: '',
-      description: 'Optional aws-access K8s secret'
+      description: 'Harbor registry host for image-pull secret'
     )
   }
 
   environment {
     AWS_DEFAULT_REGION = "${params.AWS_REGION}"
     CFN_STACK_NAME = "${params.CFN_STACK_NAME}"
-    HELM_STACK_NAME = "${params.HELM_STACK_NAME}"
     CFN_TEMPLATE_BUCKET = "${params.CFN_TEMPLATE_BUCKET}"
     NAME_PREFIX = "${params.NAME_PREFIX}"
-    INSTALL_ALB_CONTROLLER = "${params.INSTALL_ALB_CONTROLLER}"
-    PACKAGED_HELM = 'packaged-helm.yml'
-    HELM_PARAMETERS = 'jenkins-helm-parameters.json'
+    K8S_NAMESPACE = "${params.K8S_NAMESPACE}"
+    CHART_REPO = "${params.CHART_REPO}"
+    CHART_BRANCH = "${params.CHART_BRANCH}"
+    HELM_RELEASE = "${params.HELM_RELEASE}"
+    KEYCLOAK_URL = "${params.KEYCLOAK_URL}"
+    KEYCLOAK_BROWSER_URL = "${params.KEYCLOAK_BROWSER_URL}"
+    KEYCLOAK_REALM = "${params.KEYCLOAK_REALM}"
+    KEYCLOAK_CLIENT_ID = "${params.KEYCLOAK_CLIENT_ID}"
+    DEPLOY_KEYCLOAK = "${params.DEPLOY_KEYCLOAK}"
+    CONFIGURE_KEYCLOAK_REALM = "${params.CONFIGURE_KEYCLOAK_REALM}"
+    KEYCLOAK_ADMIN_USER = "${params.KEYCLOAK_ADMIN_USER}"
+    HARBOR_DOCKER_SERVER = "${params.HARBOR_DOCKER_SERVER}"
+    HELM_DEPLOY_CONTEXT = 'helm-deploy-context.env'
+    SKIP_HELM_WAIT = "${params.SKIP_HELM_WAIT}"
+    HELM_TIMEOUT = "${params.HELM_TIMEOUT}"
+    CLICKHOUSE_TABLE = "${params.CLICKHOUSE_TABLE}"
+    KEYCLOAK_IMAGE = "${params.KEYCLOAK_IMAGE}"
     RUNTIME_SECRETS_JSON = 'jenkins-runtime-secrets.json'
+    HELM_VALUES_RENDERED = 'helm-values-rendered.yaml'
   }
 
   stages {
@@ -117,11 +191,16 @@ pipeline {
     stage('Preflight') {
       steps {
         script {
+          if (!params.CREDENTIAL_HARBOR?.trim()) {
+            error('Set Jenkins parameter CREDENTIAL_HARBOR (Harbor username/password credential ID)')
+          }
+          if (params.DEPLOY_KEYCLOAK && !params.CREDENTIAL_KEYCLOAK_ADMIN?.trim()) {
+            error('DEPLOY_KEYCLOAK=true requires CREDENTIAL_KEYCLOAK_ADMIN (Secret text for admin password)')
+          }
           withAwsCredentials {
             sh '''
-            set -euo pipefail
+            set -eu
             command -v aws python3 >/dev/null
-            test -f helm-main.yml
             test -n "${CFN_TEMPLATE_BUCKET}"
             aws sts get-caller-identity
             aws s3api head-bucket --bucket "${CFN_TEMPLATE_BUCKET}"
@@ -153,7 +232,7 @@ pipeline {
         script {
           withAwsCredentials {
             sh '''
-            set -euo pipefail
+            set -eu
             BASTION_ID=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
               --query "Stacks[0].Outputs[?OutputKey=='BastionInstanceId'].OutputValue" --output text)
             test -n "$BASTION_ID"
@@ -179,7 +258,7 @@ pipeline {
               echo "Attempt ${attempt}/60: nodes=${NODES:-0} db_pods=${DB_PODS:-0}"
               sleep 20
             done
-            echo "Timed out waiting for nodes/database pods; check /var/log/spendsmart-cluster-bootstrap.log on bastion"
+            echo "Timed out waiting for nodes/database pods"
             exit 1
           '''
           }
@@ -187,182 +266,158 @@ pipeline {
       }
     }
 
-    stage('Upload Helm values') {
-      when {
-        expression { return params.UPLOAD_CLIENT_VALUES }
-      }
+    stage('Prepare Helm values') {
       steps {
         script {
           withAwsCredentials {
-            sh 'aws s3 cp client-a-values.yaml "s3://${CFN_TEMPLATE_BUCKET}/client-a-values.yaml"'
+            sh '''
+            set -eu
+            export KEYCLOAK_REALM="${KEYCLOAK_REALM}"
+            export KEYCLOAK_CLIENT_ID="${KEYCLOAK_CLIENT_ID}"
+            export KEYCLOAK_BROWSER_URL="${KEYCLOAK_BROWSER_URL}"
+            python3 scripts/prepare-helm-values.py \
+              --base-values client-a-values.yaml \
+              --out "${HELM_VALUES_RENDERED}" \
+              --context-out "${HELM_DEPLOY_CONTEXT}" \
+              --namespace "${K8S_NAMESPACE}" \
+              --stack-name "${CFN_STACK_NAME}" \
+              --region "${AWS_REGION}" \
+              --keycloak-url "${KEYCLOAK_URL}"
+            '''
+          }
+        }
+        archiveArtifacts artifacts: "${env.HELM_VALUES_RENDERED}", fingerprint: true, allowEmptyArchive: false
+      }
+    }
+
+    stage('Build runtime secrets JSON') {
+      steps {
+        script {
+          def bindings = []
+          if (params.CREDENTIAL_HARBOR?.trim()) {
+            bindings << usernamePassword(
+              credentialsId: params.CREDENTIAL_HARBOR.trim(),
+              usernameVariable: 'HARBOR_DOCKER_USERNAME',
+              passwordVariable: 'HARBOR_DOCKER_PASSWORD',
+            )
+          }
+          if (params.CREDENTIAL_ENCRYPTION_KEY?.trim()) {
+            bindings << string(credentialsId: params.CREDENTIAL_ENCRYPTION_KEY.trim(), variable: 'ENCRYPTION_KEY')
+          }
+          if (params.DEPLOY_KEYCLOAK && params.CREDENTIAL_KEYCLOAK_ADMIN?.trim()) {
+            bindings << string(credentialsId: params.CREDENTIAL_KEYCLOAK_ADMIN.trim(), variable: 'KEYCLOAK_ADMIN_PASSWORD')
+          }
+          if (params.APPLY_CLOUDSENTRY_SECRETS) {
+            if (params.CREDENTIAL_GEMINI_KEY?.trim()) {
+              bindings << string(credentialsId: params.CREDENTIAL_GEMINI_KEY.trim(), variable: 'GEMINI_API_KEY')
+            }
+            if (params.CREDENTIAL_BASE_URL?.trim()) {
+              bindings << string(credentialsId: params.CREDENTIAL_BASE_URL.trim(), variable: 'BASE_URL')
+            }
+            if (params.CREDENTIAL_APP_AWS?.trim()) {
+              bindings << usernamePassword(
+                credentialsId: params.CREDENTIAL_APP_AWS.trim(),
+                usernameVariable: 'APP_AWS_ACCESS_KEY_ID',
+                passwordVariable: 'APP_AWS_SECRET_ACCESS_KEY',
+              )
+            }
+          }
+          if (bindings.isEmpty()) {
+            error('At least CREDENTIAL_HARBOR must be set')
+          }
+          withCredentials(bindings) {
+            withAwsCredentials {
+              sh '''
+              set -eu
+              export HARBOR_DOCKER_SERVER="${HARBOR_DOCKER_SERVER}"
+              export K8S_NAMESPACE="${K8S_NAMESPACE}"
+              export KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN_USER}"
+              export CLICKHOUSE_TABLE="${CLICKHOUSE_TABLE}"
+              python3 scripts/build-runtime-secrets-json.py \
+                --out "${RUNTIME_SECRETS_JSON}" \
+                --region "${AWS_REGION}" \
+                --name-prefix "${NAME_PREFIX}" \
+                --namespace "${K8S_NAMESPACE}"
+              '''
+            }
           }
         }
       }
     }
 
-    stage('Apply application secrets') {
+    stage('Install ALB controller') {
+      when {
+        expression { return params.INSTALL_ALB_CONTROLLER }
+      }
       steps {
         script {
-          writeJSON file: env.RUNTIME_SECRETS_JSON, json: [
-            harbor_docker_server: params.HARBOR_DOCKER_SERVER,
-            harbor_docker_username: params.HARBOR_DOCKER_USERNAME,
-            harbor_docker_password: params.HARBOR_DOCKER_PASSWORD,
-            encryption_key: params.ENCRYPTION_KEY,
-            gemini_api_key: params.GEMINI_API_KEY,
-            base_url: params.BASE_URL,
-            aws_access_key_id: params.APP_AWS_ACCESS_KEY_ID,
-            aws_secret_access_key: params.APP_AWS_SECRET_ACCESS_KEY,
-          ]
+          withAwsCredentials {
+            sh '''
+            set -eu
+            BASTION_ID=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+              --query "Stacks[0].Outputs[?OutputKey=='BastionInstanceId'].OutputValue" --output text)
+            CLUSTER=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+              --query "Stacks[0].Outputs[?OutputKey=='EksClusterName'].OutputValue" --output text)
+            VPC=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+              --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)
+            CMD_ID=$(aws ssm send-command --instance-ids "$BASTION_ID" --document-name AWS-RunShellScript \
+              --parameters "commands=[
+                \"set -euo pipefail\",
+                \"export KUBECONFIG=/home/ec2-user/.kube/config\",
+                \"command -v helm >/dev/null || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash\",
+                \"helm repo add eks https://aws.github.io/eks-charts\",
+                \"helm repo update\",
+                \"helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller --namespace kube-system --create-namespace --set clusterName=${CLUSTER} --set region=${AWS_REGION} --set vpcId=${VPC} --set serviceAccount.create=true --set serviceAccount.name=aws-load-balancer-controller\",
+                \"kubectl rollout status deployment/aws-load-balancer-controller -n kube-system --timeout=15m\"
+              ]" --region "${AWS_REGION}" --query Command.CommandId --output text)
+            bash scripts/wait-ssm-command.sh "${CMD_ID}" "$BASTION_ID" "${AWS_REGION}"
+            '''
+          }
         }
+      }
+    }
+
+    stage('Apply secrets and Helm release on bastion') {
+      steps {
         script {
           withAwsCredentials {
             sh '''
             set -euo pipefail
             BASTION_ID=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
               --query "Stacks[0].Outputs[?OutputKey=='BastionInstanceId'].OutputValue" --output text)
-            KEY="bastion-assets/jenkins-secrets-${BUILD_NUMBER}.json"
-            aws s3 cp "${RUNTIME_SECRETS_JSON}" "s3://${CFN_TEMPLATE_BUCKET}/${KEY}" --sse AES256
+            PREFIX="bastion-assets/helm-deploy-${BUILD_NUMBER}"
+            aws s3 cp "${RUNTIME_SECRETS_JSON}" "s3://${CFN_TEMPLATE_BUCKET}/${PREFIX}/secrets.json" --sse AES256
+            aws s3 cp "${HELM_VALUES_RENDERED}" "s3://${CFN_TEMPLATE_BUCKET}/${PREFIX}/values.yaml" --sse AES256
+            aws s3 cp "${HELM_DEPLOY_CONTEXT}" "s3://${CFN_TEMPLATE_BUCKET}/${PREFIX}/deploy-context.env" --sse AES256
+            HELM_WAIT_ENV=true
+            if [ "${SKIP_HELM_WAIT}" = "true" ]; then HELM_WAIT_ENV=false; fi
+            DEPLOY_KC="${DEPLOY_KEYCLOAK}"
+            CONFIGURE_KC="${CONFIGURE_KEYCLOAK_REALM}"
             CMD_ID=$(aws ssm send-command --instance-ids "$BASTION_ID" --document-name AWS-RunShellScript \
               --parameters "commands=[
                 \"set -euo pipefail\",
-                \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/${KEY} /tmp/jenkins-secrets.json\",
-                \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/bastion-assets/bastion-apply-app-secrets.sh /tmp/bastion-apply-app-secrets.sh\",
-                \"chmod +x /tmp/bastion-apply-app-secrets.sh\",
-                \"sudo -u ec2-user KUBECONFIG=/home/ec2-user/.kube/config /tmp/bastion-apply-app-secrets.sh /tmp/jenkins-secrets.json\",
-                \"rm -f /tmp/jenkins-secrets.json /tmp/bastion-apply-app-secrets.sh\"
+                \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/${PREFIX}/secrets.json /tmp/jenkins-secrets.json\",
+                \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/${PREFIX}/values.yaml /tmp/helm-values-rendered.yaml\",
+                \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/${PREFIX}/deploy-context.env /tmp/helm-deploy-context.env\",
+                \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/bastion-assets/bastion-apply-chart-secrets.sh /tmp/bastion-apply-chart-secrets.sh\",
+                \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/bastion-assets/bastion-helm-install.sh /tmp/bastion-helm-install.sh\",
+                \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/bastion-assets/bastion-deploy-keycloak.sh /tmp/bastion-deploy-keycloak.sh\",
+                \"aws s3 cp s3://${CFN_TEMPLATE_BUCKET}/bastion-assets/bastion-configure-keycloak-realm.sh /tmp/bastion-configure-keycloak-realm.sh\",
+                \"chmod +x /tmp/bastion-apply-chart-secrets.sh /tmp/bastion-helm-install.sh /tmp/bastion-deploy-keycloak.sh /tmp/bastion-configure-keycloak-realm.sh\",
+                \"sudo -u ec2-user KUBECONFIG=/home/ec2-user/.kube/config /tmp/bastion-apply-chart-secrets.sh /tmp/jenkins-secrets.json\",
+                \"if [ \\\"${DEPLOY_KC}\\\" = \\\"true\\\" ]; then set -a; . /tmp/helm-deploy-context.env; set +a; sudo -u ec2-user KUBECONFIG=/home/ec2-user/.kube/config SECRETS_JSON=/tmp/jenkins-secrets.json CONFIGURE_REALM=${CONFIGURE_KC} KEYCLOAK_IMAGE=${KEYCLOAK_IMAGE} KEYCLOAK_REALM_SCRIPT=/tmp/bastion-configure-keycloak-realm.sh /tmp/bastion-deploy-keycloak.sh; fi\",
+                \"sudo -u ec2-user KUBECONFIG=/home/ec2-user/.kube/config VALUES_FILE=/tmp/helm-values-rendered.yaml CHART_REPO=${CHART_REPO} CHART_BRANCH=${CHART_BRANCH} RELEASE_NAME=${HELM_RELEASE} NAMESPACE=${K8S_NAMESPACE} HELM_TIMEOUT=${HELM_TIMEOUT} HELM_WAIT=${HELM_WAIT_ENV} /tmp/bastion-helm-install.sh\",
+                \"rm -f /tmp/jenkins-secrets.json /tmp/helm-values-rendered.yaml /tmp/helm-deploy-context.env /tmp/bastion-apply-chart-secrets.sh /tmp/bastion-helm-install.sh /tmp/bastion-deploy-keycloak.sh /tmp/bastion-configure-keycloak-realm.sh\"
               ]" --region "${AWS_REGION}" --query Command.CommandId --output text)
-            for i in $(seq 1 40); do
-              STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$BASTION_ID" \
-                --region "${AWS_REGION}" --query Status --output text)
-              if [ "$STATUS" = "Success" ]; then
-                aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$BASTION_ID" \
-                  --region "${AWS_REGION}" --query StandardOutputContent --output text
-                aws s3 rm "s3://${CFN_TEMPLATE_BUCKET}/${KEY}"
-                exit 0
-              fi
-              if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ]; then
-                aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$BASTION_ID" \
-                  --region "${AWS_REGION}" --query '[StandardOutputContent,StandardErrorContent]' --output text
-                aws s3 rm "s3://${CFN_TEMPLATE_BUCKET}/${KEY}" || true
-                exit 1
-              fi
-              sleep 5
-            done
-            exit 1
-          '''
+            bash scripts/wait-ssm-command.sh "${CMD_ID}" "$BASTION_ID" "${AWS_REGION}"
+            aws s3 rm "s3://${CFN_TEMPLATE_BUCKET}/${PREFIX}/" --recursive
+            '''
           }
         }
       }
       post {
         always {
-          sh 'rm -f "${RUNTIME_SECRETS_JSON}"'
-        }
-      }
-    }
-
-    stage('Resolve Helm parameters') {
-      steps {
-        script {
-          def valuesUri = params.SPENDSMART_VALUES_S3_URI?.trim()
-          if (!valuesUri && params.UPLOAD_CLIENT_VALUES) {
-            valuesUri = "s3://${params.CFN_TEMPLATE_BUCKET}/client-a-values.yaml"
-          }
-          env.RESOLVED_VALUES_URI = valuesUri ?: ''
-        }
-        script {
-          withAwsCredentials {
-            sh '''
-            set -euo pipefail
-            export VALUES_URI="${RESOLVED_VALUES_URI}"
-            python3 <<PY
-            import json, os, subprocess
-            from pathlib import Path
-            region = os.environ["AWS_REGION"]
-            stack = os.environ["CFN_STACK_NAME"]
-            out = subprocess.check_output(
-                ["aws", "cloudformation", "describe-stacks", "--stack-name", stack,
-                 "--region", region, "--query", "Stacks[0].Outputs", "--output", "json"],
-                text=True,
-            )
-            outputs = {o["OutputKey"]: o["OutputValue"] for o in json.loads(out)}
-            def req(k):
-                v = outputs.get(k)
-                if not v:
-                    raise SystemExit(f"Missing output: {k}")
-                return v
-            params = [
-                {"ParameterKey": "NamePrefix", "ParameterValue": os.environ["NAME_PREFIX"]},
-                {"ParameterKey": "ClusterName", "ParameterValue": req("EksClusterName")},
-                {"ParameterKey": "ClusterSecurityGroupId", "ParameterValue": req("EksClusterSecurityGroupId")},
-                {"ParameterKey": "VpcId", "ParameterValue": req("VpcId")},
-                {"ParameterKey": "PrivateSubnetId", "ParameterValue": req("PrivateSubnet1Id")},
-                {"ParameterKey": "AlbDnsName", "ParameterValue": req("AlbDnsName")},
-                {"ParameterKey": "PostgresSecretName", "ParameterValue": f"{os.environ['NAME_PREFIX']}/postgres"},
-                {"ParameterKey": "ClickHouseSecretName", "ParameterValue": f"{os.environ['NAME_PREFIX']}/clickhouse"},
-                {"ParameterKey": "SpendSmartValuesS3Uri", "ParameterValue": os.environ.get("VALUES_URI", "")},
-                {"ParameterKey": "InstallAlbController", "ParameterValue": os.environ["INSTALL_ALB_CONTROLLER"]},
-            ]
-            Path(os.environ["HELM_PARAMETERS"]).write_text(json.dumps(params, indent=2) + "\\n")
-            PY
-          '''
-          }
-        }
-      }
-    }
-
-    stage('Deploy Helm stack') {
-      steps {
-        script {
-          withAwsCredentials {
-            sh '''
-            set -euo pipefail
-            aws cloudformation package \
-              --template-file helm-main.yml \
-              --s3-bucket "${CFN_TEMPLATE_BUCKET}" \
-              --output-template-file "${PACKAGED_HELM}" \
-              --region "${AWS_REGION}"
-            aws cloudformation validate-template \
-              --template-body file://"${PACKAGED_HELM}" \
-              --region "${AWS_REGION}"
-            if aws cloudformation describe-stacks --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
-              aws cloudformation update-stack \
-                --stack-name "${HELM_STACK_NAME}" \
-                --template-body file://"${PACKAGED_HELM}" \
-                --parameters file://"${HELM_PARAMETERS}" \
-                --capabilities CAPABILITY_NAMED_IAM \
-                --region "${AWS_REGION}"
-            else
-              aws cloudformation create-stack \
-                --stack-name "${HELM_STACK_NAME}" \
-                --template-body file://"${PACKAGED_HELM}" \
-                --parameters file://"${HELM_PARAMETERS}" \
-                --capabilities CAPABILITY_NAMED_IAM \
-                --region "${AWS_REGION}"
-            fi
-          '''
-          }
-        }
-      }
-    }
-
-    stage('Wait for Helm stack') {
-      when {
-        expression { return params.WAIT_FOR_HELM_STACK }
-      }
-      steps {
-        script {
-          withAwsCredentials {
-            sh '''
-            set -euo pipefail
-            if aws cloudformation describe-stacks --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" \
-              --query 'Stacks[0].StackStatus' --output text | grep -q IN_PROGRESS; then
-              aws cloudformation wait stack-create-complete --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" 2>/dev/null \
-                || aws cloudformation wait stack-update-complete --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}"
-            fi
-            aws cloudformation describe-stacks --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" \
-              --query 'Stacks[0].Outputs' --output table
-          '''
-          }
+          sh 'rm -f "${RUNTIME_SECRETS_JSON}" "${HELM_VALUES_RENDERED}" "${HELM_DEPLOY_CONTEXT}"'
         }
       }
     }
@@ -374,10 +429,13 @@ pipeline {
         withAwsCredentials {
           sh '''
             set +e
-            aws cloudformation describe-stack-events --stack-name "${HELM_STACK_NAME}" --region "${AWS_REGION}" \
-              --max-items 15 \
-              --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[LogicalResourceId,ResourceStatusReason]' \
-              --output table
+            BASTION_ID=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+              --query "Stacks[0].Outputs[?OutputKey=='BastionInstanceId'].OutputValue" --output text 2>/dev/null)
+            if [ -n "$BASTION_ID" ]; then
+              aws ssm send-command --instance-ids "$BASTION_ID" --document-name AWS-RunShellScript \
+                --parameters 'commands=["export KUBECONFIG=/home/ec2-user/.kube/config","kubectl get pods -n '"${K8S_NAMESPACE}"' -o wide","kubectl get events -n '"${K8S_NAMESPACE}"' --sort-by=.lastTimestamp | tail -20"]' \
+                --region "${AWS_REGION}" --output text
+            fi
           '''
         }
       }
@@ -386,9 +444,10 @@ pipeline {
 }
 
 void withAwsCredentials(Closure body) {
+  def credId = params.CREDENTIAL_AWS?.trim() ?: 'aws-creds'
   withCredentials([[
     $class: 'AmazonWebServicesCredentialsBinding',
-    credentialsId: 'aws-creds',
+    credentialsId: credId,
     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY',
   ]]) {

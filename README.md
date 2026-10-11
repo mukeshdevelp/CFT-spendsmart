@@ -32,8 +32,9 @@ The AWS Load Balancer Controller creates the application ALB and target group fr
 
 `main.yml` stops at infrastructure: EKS nodes and in-cluster Postgres/ClickHouse (`databases` namespace) via bastion bootstrap. It does **not** install the SpendSmart Helm chart.
 
-1. **Jenkins `Jenkinsfile`** — package and deploy `main.yml` (sync bastion assets first).
-2. **Jenkins `Jenkinsfile.helm`** — wait for nodes/DB pods, apply runtime secrets (Harbor, etc.), deploy `helm-main.yml` (`modules/spendsmart`).
+1. **Jenkins `Jenkinsfile`** — package and deploy `main.yml` (sync bastion assets first). Optional: trigger app job via `TRIGGER_ANSIBLE_DEPLOY`.
+2. **Jenkins `Jenkinsfile.ansible`** — second pipeline: Ansible deploys SpendSmart on EKS via SSH to the bastion. See [ansible/JENKINS-TWO-PIPELINES.md](ansible/JENKINS-TWO-PIPELINES.md).
+3. **Jenkins `Jenkinsfile.helm`** — alternative app deploy (SSM + bastion scripts). See [helm-deployment.md](helm-deployment.md).
 
 Harbor and optional app secrets are Jenkins job parameters; the spendsmart module still creates DB-related secrets in the `spendsmart` namespace from Secrets Manager.
 

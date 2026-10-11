@@ -1,0 +1,14 @@
+---
+- name: Apply Keycloak Deployment and Service
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    template: keycloak.yaml.j2
+  no_log: true
+
+- name: Wait for Keycloak rollout
+  ansible.builtin.command:
+    cmd: kubectl rollout status deployment/keycloak -n {{ k8s_namespace }} --timeout=900s
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  changed_when: false

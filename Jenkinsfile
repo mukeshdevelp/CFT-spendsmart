@@ -43,6 +43,16 @@ pipeline {
       defaultValue: true,
       description: 'Wait for stack create/update to finish'
     )
+    booleanParam(
+      name: 'TRIGGER_ANSIBLE_DEPLOY',
+      defaultValue: false,
+      description: 'After successful infra deploy, start the Ansible app deploy job'
+    )
+    string(
+      name: 'ANSIBLE_DEPLOY_JOB_NAME',
+      defaultValue: 'spendsmart-ansible-deploy',
+      description: 'Jenkins job name that uses Jenkinsfile.ansible'
+    )
   }
 
   environment {
@@ -215,14 +225,20 @@ PY
   }
 
   post {
-    failure {
+    success {
       script {
-       
-          sh '''
-            echo "Error: Stack deployment failed"
-          '''
-       
+        if (params.TRIGGER_ANSIBLE_DEPLOY) {
+          build job: params.ANSIBLE_DEPLOY_JOB_NAME,
+            wait: false,
+            parameters: [
+              string(name: 'AWS_REGION', value: params.AWS_REGION),
+              string(name: 'CFN_STACK_NAME', value: params.CFN_STACK_NAME),
+            ]
+        }
       }
+    }
+    failure {
+      sh 'echo "Error: Stack deployment failed"'
     }
   }
 }

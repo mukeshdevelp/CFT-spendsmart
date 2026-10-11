@@ -1,0 +1,267 @@
+pipeline {
+  agent any
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+  }
+
+  parameters {
+    choice(
+      name: 'AWS_REGION',
+      choices: ['us-east-1', 'ap-south-1'],
+      description: 'Region of the infra stack (default us-east-1).'
+    )
+    string(
+      name: 'CFN_STACK_NAME',
+      defaultValue: 'spendsmart-dev',
+      description: 'Infra stack from Jenkinsfile (must be CREATE_COMPLETE / UPDATE_COMPLETE)'
+    )
+    string(
+      name: 'NAME_PREFIX',
+      defaultValue: 'spendsmart-dev',
+      description: 'Secrets Manager prefix for DB passwords'
+    )
+    string(
+      name: 'BASTION_SSH_USER',
+      defaultValue: 'ec2-user',
+      description: 'SSH user on the bastion'
+    )
+    string(
+      name: 'K8S_NAMESPACE',
+      defaultValue: 'spendsmart',
+      description: 'Kubernetes / Helm namespace'
+    )
+    booleanParam(
+      name: 'WAIT_FOR_CLUSTER',
+      defaultValue: true,
+      description: 'Wait for 4 nodes and 2 DB pods before deploy'
+    )
+    booleanParam(
+      name: 'DEPLOY_KEYCLOAK',
+      defaultValue: true,
+      description: 'Deploy Keycloak before Helm chart'
+    )
+    booleanParam(
+      name: 'CONFIGURE_KEYCLOAK_REALM',
+      defaultValue: true,
+      description: 'Create Keycloak realm and OIDC client'
+    )
+    booleanParam(
+      name: 'INSTALL_ALB_CONTROLLER',
+      defaultValue: false,
+      description: 'Install AWS Load Balancer Controller (once per cluster)'
+    )
+    booleanParam(
+      name: 'HELM_WAIT',
+      defaultValue: true,
+      description: 'helm upgrade --wait'
+    )
+    string(
+      name: 'HELM_TIMEOUT',
+      defaultValue: '25m',
+      description: 'Helm timeout'
+    )
+    booleanParam(
+      name: 'APPLY_CLOUDSENTRY_SECRETS',
+      defaultValue: false,
+      description: 'Apply optional Cloud-Sentry K8s secrets from Jenkins'
+    )
+    string(
+      name: 'CREDENTIAL_AWS',
+      defaultValue: 'aws-creds',
+      description: 'Jenkins AWS credentials (CloudFormation + Secrets Manager lookups)'
+    )
+    string(
+      name: 'CREDENTIAL_BASTION_SSH',
+      defaultValue: 'bastion-ssh-key',
+      description: 'Jenkins SSH private key for bastion (user must match BASTION_SSH_USER)'
+    )
+    string(
+      name: 'CREDENTIAL_HARBOR',
+      defaultValue: 'harbor-creds',
+      description: 'Harbor username/password'
+    )
+    string(
+      name: 'CREDENTIAL_ENCRYPTION_KEY',
+      defaultValue: 'spendsmart-encryption-key',
+      description: 'Secret text: encryption-key'
+    )
+    string(
+      name: 'CREDENTIAL_KEYCLOAK_ADMIN',
+      defaultValue: 'spendsmart-keycloak-admin',
+      description: 'Secret text: Keycloak admin password'
+    )
+    string(
+      name: 'KEYCLOAK_ADMIN_USER',
+      defaultValue: 'admin',
+      description: 'Keycloak admin username'
+    )
+    string(
+      name: 'CREDENTIAL_GEMINI_KEY',
+      defaultValue: 'spendsmart-gemini-key',
+      description: 'Optional; used when APPLY_CLOUDSENTRY_SECRETS=true'
+    )
+    string(
+      name: 'CREDENTIAL_BASE_URL',
+      defaultValue: 'spendsmart-base-url',
+      description: 'Optional; used when APPLY_CLOUDSENTRY_SECRETS=true'
+    )
+    string(
+      name: 'CREDENTIAL_APP_AWS',
+      defaultValue: 'spendsmart-app-aws',
+      description: 'Optional; used when APPLY_CLOUDSENTRY_SECRETS=true'
+    )
+  }
+
+  environment {
+    AWS_DEFAULT_REGION = "${params.AWS_REGION}"
+    CFN_STACK_NAME = "${params.CFN_STACK_NAME}"
+    NAME_PREFIX = "${params.NAME_PREFIX}"
+    BASTION_SSH_USER = "${params.BASTION_SSH_USER}"
+    ANSIBLE_DIR = 'ansible'
+    ANSIBLE_INVENTORY = 'ansible/inventory/jenkins-generated.yml'
+    ANSIBLE_SECRETS_FILE = 'ansible/group_vars/secrets.yml'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Preflight') {
+      steps {
+        script {
+          if (!params.CREDENTIAL_HARBOR?.trim()) {
+            error('CREDENTIAL_HARBOR is required')
+          }
+          if (!params.CREDENTIAL_BASTION_SSH?.trim()) {
+            error('CREDENTIAL_BASTION_SSH is required (SSH key for bastion)')
+          }
+          withAwsCredentials {
+            sh '''
+            set -euo pipefail
+            command -v aws python3 >/dev/null
+            command -v ansible-playbook >/dev/null || { echo "Install ansible on the Jenkins agent"; exit 1; }
+            STATUS=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+              --query 'Stacks[0].StackStatus' --output text)
+            echo "Infra stack status: ${STATUS}"
+            case "$STATUS" in
+              CREATE_COMPLETE|UPDATE_COMPLETE) ;;
+              *) echo "Run the infra Jenkinsfile first"; exit 1 ;;
+            esac
+            '''
+          }
+        }
+      }
+    }
+
+    stage('Generate Ansible inventory') {
+      steps {
+        script {
+          withAwsCredentials {
+            sh 'bash scripts/generate-ansible-inventory.sh "${ANSIBLE_INVENTORY}"'
+          }
+        }
+        archiveArtifacts artifacts: "${env.ANSIBLE_INVENTORY}", fingerprint: true, allowEmptyArchive: true
+      }
+    }
+
+    stage('Install Ansible collections') {
+      steps {
+        sh '''
+        set -euo pipefail
+        cd "${ANSIBLE_DIR}"
+        ansible-galaxy collection install -r requirements.yml -p collections
+        '''
+      }
+    }
+
+    stage('Run SpendSmart Ansible playbook') {
+      steps {
+        script {
+          writeFile file: 'ansible/jenkins-extra-vars.yml', text: """---
+aws_region: ${params.AWS_REGION}
+cfn_stack_name: ${params.CFN_STACK_NAME}
+name_prefix: ${params.NAME_PREFIX}
+k8s_namespace: ${params.K8S_NAMESPACE}
+keycloak_admin_user: ${params.KEYCLOAK_ADMIN_USER}
+wait_for_cluster: ${params.WAIT_FOR_CLUSTER}
+deploy_keycloak: ${params.DEPLOY_KEYCLOAK}
+configure_keycloak_realm: ${params.CONFIGURE_KEYCLOAK_REALM}
+install_alb_controller: ${params.INSTALL_ALB_CONTROLLER}
+helm_wait: ${params.HELM_WAIT}
+helm_timeout: ${params.HELM_TIMEOUT}
+apply_cloudsentry_secrets: ${params.APPLY_CLOUDSENTRY_SECRETS}
+"""
+          def bindings = []
+          bindings << usernamePassword(
+            credentialsId: params.CREDENTIAL_HARBOR.trim(),
+            usernameVariable: 'HARBOR_DOCKER_USERNAME',
+            passwordVariable: 'HARBOR_DOCKER_PASSWORD',
+          )
+          if (params.CREDENTIAL_ENCRYPTION_KEY?.trim()) {
+            bindings << string(credentialsId: params.CREDENTIAL_ENCRYPTION_KEY.trim(), variable: 'ENCRYPTION_KEY')
+          }
+          if (params.DEPLOY_KEYCLOAK && params.CREDENTIAL_KEYCLOAK_ADMIN?.trim()) {
+            bindings << string(credentialsId: params.CREDENTIAL_KEYCLOAK_ADMIN.trim(), variable: 'KEYCLOAK_ADMIN_PASSWORD')
+          }
+          if (params.APPLY_CLOUDSENTRY_SECRETS) {
+            if (params.CREDENTIAL_GEMINI_KEY?.trim()) {
+              bindings << string(credentialsId: params.CREDENTIAL_GEMINI_KEY.trim(), variable: 'GEMINI_API_KEY')
+            }
+            if (params.CREDENTIAL_BASE_URL?.trim()) {
+              bindings << string(credentialsId: params.CREDENTIAL_BASE_URL.trim(), variable: 'BASE_URL')
+            }
+            if (params.CREDENTIAL_APP_AWS?.trim()) {
+              bindings << usernamePassword(
+                credentialsId: params.CREDENTIAL_APP_AWS.trim(),
+                usernameVariable: 'APP_AWS_ACCESS_KEY_ID',
+                passwordVariable: 'APP_AWS_SECRET_ACCESS_KEY',
+              )
+            }
+          }
+          bindings << sshUserPrivateKey(
+            credentialsId: params.CREDENTIAL_BASTION_SSH.trim(),
+            keyFileVariable: 'ANSIBLE_PRIVATE_KEY_FILE',
+            usernameVariable: 'ANSIBLE_SSH_USER',
+          )
+          withCredentials(bindings) {
+            withAwsCredentials {
+              sh '''
+              set -euo pipefail
+              export ANSIBLE_HOST_KEY_CHECKING=False
+              export ANSIBLE_PRIVATE_KEY_FILE
+              export ANSIBLE_COLLECTIONS_PATH="${WORKSPACE}/ansible/collections"
+              export ANSIBLE_SECRETS_FILE="${WORKSPACE}/ansible/group_vars/secrets.yml"
+              python3 scripts/jenkins-write-ansible-secrets.py
+              cd ansible
+              ansible-playbook \
+                -i inventory/jenkins-generated.yml \
+                playbooks/deploy-spendsmart.yml \
+                -e @jenkins-extra-vars.yml \
+                --private-key "${ANSIBLE_PRIVATE_KEY_FILE}"
+              rm -f "${ANSIBLE_SECRETS_FILE}" "${WORKSPACE}/ansible/jenkins-extra-vars.yml"
+              '''
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+void withAwsCredentials(Closure body) {
+  def credId = params.CREDENTIAL_AWS?.trim() ?: 'aws-creds'
+  withCredentials([[
+    $class: 'AmazonWebServicesCredentialsBinding',
+    credentialsId: credId,
+    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY',
+  ]]) {
+    body()
+  }
+}
