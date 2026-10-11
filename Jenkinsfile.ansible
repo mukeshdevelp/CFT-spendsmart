@@ -75,8 +75,13 @@ pipeline {
     )
     string(
       name: 'CREDENTIAL_ENCRYPTION_KEY',
-      defaultValue: 'spendsmart-encryption-key',
-      description: 'Secret text: encryption-key'
+      defaultValue: '',
+      description: 'Optional Secret text ID; if empty, uses ENCRYPTION_KEY_FALLBACK'
+    )
+    password(
+      name: 'ENCRYPTION_KEY_FALLBACK',
+      defaultValue: 'dev-spendsmart-encryption-key-change-me',
+      description: 'Dev default ENCRYPTION_KEY when credential ID is empty'
     )
   }
 
@@ -164,39 +169,23 @@ helm_wait: ${params.HELM_WAIT}
 helm_timeout: ${params.HELM_TIMEOUT}
 inject_cfn_urls: false
 """
-          def bindings = []
-          bindings << usernamePassword(
-            credentialsId: params.CREDENTIAL_HARBOR.trim(),
-            usernameVariable: 'HARBOR_DOCKER_USERNAME',
-            passwordVariable: 'HARBOR_DOCKER_PASSWORD',
-          )
-          if (params.CREDENTIAL_ENCRYPTION_KEY?.trim()) {
-            bindings << string(credentialsId: params.CREDENTIAL_ENCRYPTION_KEY.trim(), variable: 'ENCRYPTION_KEY')
-          }
-          bindings << sshUserPrivateKey(
-            credentialsId: params.CREDENTIAL_BASTION_SSH.trim(),
-            keyFileVariable: 'ANSIBLE_PRIVATE_KEY_FILE',
-            usernameVariable: 'ANSIBLE_SSH_USER',
-          )
-          withCredentials(bindings) {
-            withAwsCredentials {
-              sh '''
-              set -eux
-              export ANSIBLE_CONFIG="${WORKSPACE}/ansible/ansible.cfg"
-              export ANSIBLE_HOST_KEY_CHECKING=False
-              test -f "${ANSIBLE_PRIVATE_KEY_FILE}"
-              export ANSIBLE_SECRETS_FILE="${WORKSPACE}/ansible/group_vars/secrets.yml"
-              python3 "${WORKSPACE}/scripts/jenkins-write-ansible-secrets.py"
-              cd "${WORKSPACE}/ansible"
-              ansible-playbook \
-                -i inventory/jenkins-generated.yml \
-                playbooks/deploy-spendsmart.yml \
-                -e @jenkins-extra-vars.yml \
-                --private-key "${ANSIBLE_PRIVATE_KEY_FILE}" \
-                -vv
-              rm -f "${ANSIBLE_SECRETS_FILE}" "${WORKSPACE}/ansible/jenkins-extra-vars.yml"
-              '''
-            }
+          withAnsibleDeployCredentials {
+            sh '''
+            set -eux
+            export ANSIBLE_CONFIG="${WORKSPACE}/ansible/ansible.cfg"
+            export ANSIBLE_HOST_KEY_CHECKING=False
+            test -f "${ANSIBLE_PRIVATE_KEY_FILE}"
+            export ANSIBLE_SECRETS_FILE="${WORKSPACE}/ansible/group_vars/secrets.yml"
+            python3 "${WORKSPACE}/scripts/jenkins-write-ansible-secrets.py"
+            cd "${WORKSPACE}/ansible"
+            ansible-playbook \
+              -i inventory/jenkins-generated.yml \
+              playbooks/deploy-spendsmart.yml \
+              -e @jenkins-extra-vars.yml \
+              --private-key "${ANSIBLE_PRIVATE_KEY_FILE}" \
+              -vv
+            rm -f "${ANSIBLE_SECRETS_FILE}" "${WORKSPACE}/ansible/jenkins-extra-vars.yml"
+            '''
           }
         }
       }
@@ -213,5 +202,39 @@ void withAwsCredentials(Closure body) {
     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY',
   ]]) {
     body()
+  }
+}
+
+void withAnsibleDeployCredentials(Closure body) {
+  def awsCredId = params.CREDENTIAL_AWS?.trim() ?: 'aws-creds'
+  def bindings = []
+  bindings << usernamePassword(
+    credentialsId: params.CREDENTIAL_HARBOR.trim(),
+    usernameVariable: 'HARBOR_DOCKER_USERNAME',
+    passwordVariable: 'HARBOR_DOCKER_PASSWORD',
+  )
+  def useEncryptionCred = params.CREDENTIAL_ENCRYPTION_KEY?.trim()
+  if (useEncryptionCred) {
+    bindings << string(credentialsId: params.CREDENTIAL_ENCRYPTION_KEY.trim(), variable: 'ENCRYPTION_KEY')
+  }
+  bindings << sshUserPrivateKey(
+    credentialsId: params.CREDENTIAL_BASTION_SSH.trim(),
+    keyFileVariable: 'ANSIBLE_PRIVATE_KEY_FILE',
+    usernameVariable: 'ANSIBLE_SSH_USER',
+  )
+  bindings << [
+    $class: 'AmazonWebServicesCredentialsBinding',
+    credentialsId: awsCredId,
+    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY',
+  ]
+  withCredentials(bindings) {
+    if (useEncryptionCred) {
+      body()
+    } else {
+      withEnv(["ENCRYPTION_KEY=${params.ENCRYPTION_KEY_FALLBACK}"]) {
+        body()
+      }
+    }
   }
 }

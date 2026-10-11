@@ -115,8 +115,13 @@ pipeline {
     )
     string(
       name: 'CREDENTIAL_ENCRYPTION_KEY',
-      defaultValue: 'spendsmart-encryption-key',
-      description: 'Jenkins Secret text for encryption-key K8s secret (leave empty ID to skip)'
+      defaultValue: '',
+      description: 'Optional Jenkins Secret text ID; if empty, uses ENCRYPTION_KEY_FALLBACK below'
+    )
+    password(
+      name: 'ENCRYPTION_KEY_FALLBACK',
+      defaultValue: 'dev-spendsmart-encryption-key-change-me',
+      description: 'Default ENCRYPTION_KEY when no Jenkins credential (dev only — replace in production)'
     )
     string(
       name: 'CREDENTIAL_KEYCLOAK_ADMIN',
@@ -302,38 +307,19 @@ pipeline {
     stage('Build runtime secrets JSON') {
       steps {
         script {
-          def bindings = []
-          if (params.CREDENTIAL_HARBOR?.trim()) {
-            bindings << usernamePassword(
-              credentialsId: params.CREDENTIAL_HARBOR.trim(),
-              usernameVariable: 'HARBOR_DOCKER_USERNAME',
-              passwordVariable: 'HARBOR_DOCKER_PASSWORD',
-            )
-          }
-          if (params.CREDENTIAL_ENCRYPTION_KEY?.trim()) {
-            bindings << string(credentialsId: params.CREDENTIAL_ENCRYPTION_KEY.trim(), variable: 'ENCRYPTION_KEY')
-          }
-          if (params.DEPLOY_KEYCLOAK && params.CREDENTIAL_KEYCLOAK_ADMIN?.trim()) {
-            bindings << string(credentialsId: params.CREDENTIAL_KEYCLOAK_ADMIN.trim(), variable: 'KEYCLOAK_ADMIN_PASSWORD')
-          }
-          if (bindings.isEmpty()) {
-            error('At least CREDENTIAL_HARBOR must be set')
-          }
-          withCredentials(bindings) {
-            withAwsCredentials {
-              sh '''
-              set -eu
-              export HARBOR_DOCKER_SERVER="${HARBOR_DOCKER_SERVER}"
-              export K8S_NAMESPACE="${K8S_NAMESPACE}"
-              export CLICKHOUSE_TABLE="${CLICKHOUSE_TABLE}"
-              export CLICKHOUSE_PORT=8123
-              python3 scripts/build-runtime-secrets-json.py \
-                --out "${RUNTIME_SECRETS_JSON}" \
-                --region "${AWS_REGION}" \
-                --name-prefix "${NAME_PREFIX}" \
-                --namespace "${K8S_NAMESPACE}"
-              '''
-            }
+          withHelmAppCredentials {
+            sh '''
+            set -eu
+            export HARBOR_DOCKER_SERVER="${HARBOR_DOCKER_SERVER}"
+            export K8S_NAMESPACE="${K8S_NAMESPACE}"
+            export CLICKHOUSE_TABLE="${CLICKHOUSE_TABLE}"
+            export CLICKHOUSE_PORT=8123
+            python3 scripts/build-runtime-secrets-json.py \
+              --out "${RUNTIME_SECRETS_JSON}" \
+              --region "${AWS_REGION}" \
+              --name-prefix "${NAME_PREFIX}" \
+              --namespace "${K8S_NAMESPACE}"
+            '''
           }
         }
       }
@@ -446,5 +432,44 @@ void withAwsCredentials(Closure body) {
     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY',
   ]]) {
     body()
+  }
+}
+
+// Harbor + encryption (+ optional Keycloak) and AWS in one withCredentials — Jenkins cannot nest bindings.
+void withHelmAppCredentials(Closure body) {
+  def awsCredId = params.CREDENTIAL_AWS?.trim() ?: 'aws-creds'
+  def bindings = []
+  bindings << usernamePassword(
+    credentialsId: params.CREDENTIAL_HARBOR.trim(),
+    usernameVariable: 'HARBOR_DOCKER_USERNAME',
+    passwordVariable: 'HARBOR_DOCKER_PASSWORD',
+  )
+  def useEncryptionCred = params.CREDENTIAL_ENCRYPTION_KEY?.trim()
+  if (useEncryptionCred) {
+    bindings << string(
+      credentialsId: params.CREDENTIAL_ENCRYPTION_KEY.trim(),
+      variable: 'ENCRYPTION_KEY',
+    )
+  }
+  if (params.DEPLOY_KEYCLOAK && params.CREDENTIAL_KEYCLOAK_ADMIN?.trim()) {
+    bindings << string(
+      credentialsId: params.CREDENTIAL_KEYCLOAK_ADMIN.trim(),
+      variable: 'KEYCLOAK_ADMIN_PASSWORD',
+    )
+  }
+  bindings << [
+    $class: 'AmazonWebServicesCredentialsBinding',
+    credentialsId: awsCredId,
+    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY',
+  ]
+  withCredentials(bindings) {
+    if (useEncryptionCred) {
+      body()
+    } else {
+      withEnv(["ENCRYPTION_KEY=${params.ENCRYPTION_KEY_FALLBACK}"]) {
+        body()
+      }
+    }
   }
 }

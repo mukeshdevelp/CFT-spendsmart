@@ -22,7 +22,7 @@ This maps the [local SpendSmart deploy guide](https://github.com/mukeshdevelp/sp
 | Credential | For |
 |------------|-----|
 | `harbor-creds` | Step 6 |
-| `spendsmart-encryption-key` | Step 14 |
+| `spendsmart-encryption-key` (optional) | Step 14 — or job param **ENCRYPTION_KEY_FALLBACK** (dev default) |
 | `aws-creds` | Read `{name_prefix}/clickhouse` password from Secrets Manager |
 | `bastion-ssh-key` | Ansible SSH to bastion (Ansible job only) |
 
