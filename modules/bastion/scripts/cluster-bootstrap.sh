@@ -26,6 +26,7 @@ export EKS_REGION EKS_CLUSTER_NAME
 bash "${SCRIPT_DIR}/configure-kubeconfig.sh"
 export KUBECONFIG=/root/.kube/config
 
+
 until kubectl get nodes >/dev/null 2>&1; do
   echo "Waiting for EKS API..."
   sleep 10
