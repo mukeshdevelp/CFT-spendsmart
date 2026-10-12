@@ -17,6 +17,16 @@ Infra (`Jenkinsfile` / `scripts/cfn-deploy.sh`) must be **CREATE_COMPLETE** with
 
 Credentials: **`harbor-creds`** (mirror only), **`spendsmart-gpg-key`**, **`aws-creds`**.
 
+### Harbor `unauthorized` on mirror
+
+1. Jenkins **`harbor-creds`** = **Username with password** (not secret text). Username/password must work on the **Jenkins agent**:
+   ```bash
+   docker login harbor.ldc.opstree.dev -u '<same-as-jenkins>' -p '<token>'
+   docker pull harbor.ldc.opstree.dev/coe/uniteconpro-backend-prod:latest
+   ```
+2. Harbor **robot** users look like `robot$coe+<name>` and need **pull** on project **`coe`**.
+3. Jenkins agent must reach Harbor (VPN/office network). If not, mirror on PC and run the job with **`MIRROR_TO_ECR=false`** and matching **`IMAGE_TAG`**.
+
 Bastion log: `sudo tail -f /var/log/spendsmart-helm-deploy.log`
 
 ## Manual: PC mirror then deploy

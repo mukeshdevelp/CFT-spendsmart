@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pull SpendSmart images from Harbor (machine with Harbor access) and push to ECR.
-# Required: docker, aws CLI; HARBOR_USERNAME + HARBOR_PASSWORD (or prior docker login).
+# Required: docker, aws CLI, HARBOR_USERNAME, HARBOR_PASSWORD (Harbor robot or user with pull on project coe).
 set -euo pipefail
 
 AWS_REGION="${AWS_REGION:-us-east-1}"
@@ -9,8 +9,14 @@ HARBOR_TAG="${HARBOR_TAG:-latest}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 ECR_REPO_PREFIX="${ECR_REPO_PREFIX:-spendsmart}"
 
-if [[ -n "${HARBOR_USERNAME:-}" && -n "${HARBOR_PASSWORD:-}" ]]; then
-  echo "$HARBOR_PASSWORD" | docker login "$HARBOR_SERVER" -u "$HARBOR_USERNAME" --password-stdin
+: "${HARBOR_USERNAME:?HARBOR_USERNAME is required (Jenkins harbor-creds or export before running)}"
+: "${HARBOR_PASSWORD:?HARBOR_PASSWORD is required}"
+
+echo "Harbor login: ${HARBOR_SERVER} user=${HARBOR_USERNAME}"
+if ! printf '%s' "$HARBOR_PASSWORD" | docker login "$HARBOR_SERVER" -u "$HARBOR_USERNAME" --password-stdin; then
+  echo "Harbor docker login failed. Use the same username/password as: docker login ${HARBOR_SERVER}"
+  echo "Robot accounts are usually named like: robot\$coe+<robot-name>"
+  exit 1
 fi
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
@@ -28,7 +34,11 @@ mirror_one() {
     || aws ecr create-repository --repository-name "$ecr_repo" --region "$AWS_REGION" >/dev/null
 
   echo "=== ${src} -> ${dst} ==="
-  docker pull "$src"
+  if ! docker pull "$src"; then
+    echo "Harbor pull failed (unauthorized?). User needs pull on project coe for ${harbor_image}"
+    echo "On a machine with Harbor access, test: docker pull ${src}"
+    exit 1
+  fi
   docker tag "$src" "$dst"
   docker push "$dst"
   if [[ "$IMAGE_TAG" != "latest" ]]; then

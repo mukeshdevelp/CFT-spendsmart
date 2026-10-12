@@ -65,6 +65,9 @@ pipeline {
           def mirrorSh = '''
             set -eu
             command -v docker >/dev/null || { echo "docker not on this agent — set MIRROR_TO_ECR=false after PC mirror, or MIRROR_AGENT_LABEL"; exit 1; }
+            test -n "${HARBOR_USERNAME:-}" || { echo "HARBOR_USERNAME empty — check Jenkins credential (Username with password)"; exit 1; }
+            test -n "${HARBOR_PASSWORD:-}" || { echo "HARBOR_PASSWORD empty — update harbor-creds in Jenkins"; exit 1; }
+            export HARBOR_SERVER=harbor.ldc.opstree.dev
             export IMAGE_TAG="${RESOLVED_IMAGE_TAG}"
             export ECR_REPO_PREFIX="${ECR_REPO_PREFIX}"
             export HARBOR_TAG="${HARBOR_TAG}"
