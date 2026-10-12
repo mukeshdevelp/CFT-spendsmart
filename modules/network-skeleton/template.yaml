@@ -36,12 +36,12 @@ Parameters:
   AvailabilityZone1:
     Type: String
     Default: 'us-east-1a'
-    Description: Optional AZ override. Empty selects the first available AZ.
+    Description: AZ for public/private subnet 1. Must be EKS control-plane supported (not us-east-1e in us-east-1).
 
   AvailabilityZone2:
     Type: String
     Default: 'us-east-1b'
-    Description: Optional AZ override. Empty selects the second available AZ.
+    Description: AZ for public/private subnet 2. Use a different AZ than subnet 1.
 
   EnableNatGateway:
     Type: String

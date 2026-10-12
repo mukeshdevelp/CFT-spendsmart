@@ -31,15 +31,25 @@ This guide deploys the **infra** CloudFormation root stack in `main.yml` (throug
 
 **Cost and bucket deletion:** The NAT gateway, EKS control plane, EC2 nodes, bastion, ALB, and data transfer incur charges. CloudFormation deletes the S3 bucket on rollback or stack deletion. S3 requires a bucket to be empty, including all object versions, before it can be deleted; a non-empty bucket can make stack cleanup fail.
 
-### Eks nested stack: “Validation failure detected” / CREATE_FAILED
+### Eks nested stack: CREATE_FAILED
 
-1. Open **CloudFormation → Stacks → `spendsmart-dev-Eks-…` → Events** and read the **first failed resource** (often `EksClusterRole` or `EksCluster`).
-2. **Orphan IAM roles** after rollback block recreate (`Role with name … already exists`):
-   ```bash
-   NAME_PREFIX=spendsmart-dev bash scripts/cfn-cleanup-orphan-eks-roles.sh
-   ```
-3. Redeploy from a **packaged** template (`aws cloudformation package` then `cfn-deploy.sh`), not raw `main.yml` with local `TemplateURL` paths.
-4. If the event cites **Kubernetes version**, set a supported version in `modules/eks/template.yaml` (`EksClusterVersion`, e.g. `1.35`).
+**`EKS does not support … us-east-1e`:** Control plane subnets must be in **two** of `us-east-1a/b/c/d/f` (not **1e**). This stack’s **Network** module defaults to **`us-east-1a` + `us-east-1b`** (`PrivateSubnetAz1/2` in `main.yml`). Do not point EKS at default-VPC subnets in `us-east-1e` only.
+
+**`Validation failure detected` (fast fail):** Often orphan IAM role `spendsmart-dev-eks-cluster` after rollback:
+```bash
+NAME_PREFIX=spendsmart-dev bash scripts/cfn-cleanup-orphan-eks-roles.sh
+```
+
+**`ROLLBACK_FAILED` on root stack (S3):** Empty the data bucket, then delete:
+```bash
+S3_BUCKET_NAME=athena-results-spendsmart-dev bash scripts/cfn-delete-stuck-stack.sh
+```
+
+**Redeploy (package + deploy):**
+```bash
+CFN_TEMPLATE_BUCKET=spendsmart-cfn-packages bash scripts/cfn-package.sh
+bash scripts/cfn-deploy.sh
+```
 
 ### S3 nested stack fails with “Validation failure detected”
 

@@ -67,6 +67,15 @@ Parameters:
     Default: spendsmart-cfn-packages
     Description: S3 bucket for packaged nested templates and bastion bootstrap assets (bastion-assets/).
 
+  # EKS control plane cannot use us-east-1e (use two of 1a/1b/1c/1d/1f).
+  PrivateSubnetAz1:
+    Type: String
+    Default: us-east-1a
+
+  PrivateSubnetAz2:
+    Type: String
+    Default: us-east-1b
+
 Rules:
   ExistingEksInputsRequired:
     RuleCondition: !Equals [!Ref EksClusterMode, UseExisting]
@@ -110,6 +119,8 @@ Resources:
         NamePrefix: !Ref NamePrefix
         Environment: dev
         EksClusterName: spendsmart
+        AvailabilityZone1: !Ref PrivateSubnetAz1
+        AvailabilityZone2: !Ref PrivateSubnetAz2
 
   Bastion:
     Type: AWS::CloudFormation::Stack

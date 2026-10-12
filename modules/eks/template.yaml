@@ -183,7 +183,6 @@ Resources:
   EksClusterRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${NamePrefix}${EksClusterRoleNameSuffix}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -207,7 +206,6 @@ Resources:
   EksNodeRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${NamePrefix}${EksNodeRoleNameSuffix}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -544,7 +542,6 @@ Resources:
   AlbControllerRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${NamePrefix}${AlbControllerIamPolicyNameSuffix}-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:

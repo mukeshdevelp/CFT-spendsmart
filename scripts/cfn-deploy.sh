@@ -6,6 +6,7 @@ STACK_NAME="${CFN_STACK_NAME:-spendsmart-dev}"
 REGION="${AWS_REGION:-us-east-1}"
 TEMPLATE="${PACKAGED_TEMPLATE:-${ROOT}/packaged.yml}"
 PARAMS_FILE="${ROOT}/.cfn-parameters.local.json"
+BUCKET="${CFN_TEMPLATE_BUCKET:-spendsmart-cfn-packages}"
 
 export CFN_PARAMETERS_BASE="${ROOT}/parameters.json"
 export CFN_PARAMETERS_OUT="$PARAMS_FILE"
@@ -29,8 +30,10 @@ wait_for_stable_stack() {
       aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$REGION"
       return 0
       ;;
-    DELETE_FAILED)
-      echo "Stack ${STACK_NAME} is DELETE_FAILED (often S3 DataBucket not empty)."
+    DELETE_FAILED|ROLLBACK_FAILED)
+      echo "Stack ${STACK_NAME} is ${status}."
+      echo "Run: S3_BUCKET_NAME=<bucket> bash scripts/cfn-delete-stuck-stack.sh"
+      echo "Then: CFN_TEMPLATE_BUCKET=${BUCKET} bash scripts/cfn-package.sh && bash scripts/cfn-deploy.sh"
       exit 1
       ;;
     CREATE_IN_PROGRESS|UPDATE_IN_PROGRESS|UPDATE_COMPLETE_CLEANUP_IN_PROGRESS|\
@@ -68,6 +71,18 @@ cfn_update() {
   fi
   aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME" --region "$REGION"
 }
+
+NAME_PREFIX="${NAME_PREFIX:-spendsmart-dev}"
+if aws iam get-role --role-name "${NAME_PREFIX}-eks-cluster" >/dev/null 2>&1; then
+  echo "Orphan IAM role ${NAME_PREFIX}-eks-cluster blocks Eks nested stack."
+  echo "Run: NAME_PREFIX=${NAME_PREFIX} bash scripts/cfn-cleanup-orphan-eks-roles.sh"
+  exit 1
+fi
+
+if [[ "${CFN_SKIP_PACKAGE:-}" != "1" ]]; then
+  export CFN_TEMPLATE_BUCKET="$BUCKET"
+  bash "${ROOT}/scripts/cfn-package.sh"
+fi
 
 wait_for_stable_stack
 status="$(stack_status)"
