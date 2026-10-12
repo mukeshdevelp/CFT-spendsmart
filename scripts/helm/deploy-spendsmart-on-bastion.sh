@@ -142,6 +142,17 @@ frontend:
     enabled: true
     configMap:
       name: spendsmart-frontend-nginx
+    csp:
+      connectSrc:
+        - "'self'"
+        - "${API_URL}"
+        - "${KC_URL}"
+        - "wss:"
+      frameSrc:
+        - "'self'"
+        - "${KC_URL}"
+        - "https:"
+
   annotations: {}
 cloudsentry:
   enabled: false
