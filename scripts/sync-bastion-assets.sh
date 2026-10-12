@@ -11,6 +11,7 @@ install -D -m 0755 "$ROOT/modules/bastion/scripts/cluster-bootstrap.sh" "$STAGIN
 install -D -m 0755 "$ROOT/modules/bastion/scripts/install-kubectl.sh" "$STAGING/install-kubectl.sh"
 install -D -m 0755 "$ROOT/modules/bastion/scripts/configure-kubeconfig.sh" "$STAGING/configure-kubeconfig.sh"
 install -D -m 0644 "$ROOT/modules/bastion/manifests/databases.yaml" "$STAGING/manifests/databases.yaml"
+install -D -m 0755 "$ROOT/scripts/helm/deploy-spendsmart-on-bastion.sh" "$STAGING/deploy-spendsmart-on-bastion.sh"
 
 aws s3 sync "$STAGING/" "s3://${BUCKET}/bastion-assets/" --region "$REGION"
 echo "Synced to s3://${BUCKET}/bastion-assets/"

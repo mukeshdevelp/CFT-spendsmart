@@ -1,123 +1,39 @@
 # SpendSmart CloudFormation Architecture
 
-## Purpose and Ownership
+## Purpose
 
-The modular CloudFormation root stack provisions AWS infrastructure through nested templates under `modules/`. When enabled, the SpendSmart nested module uses a private deployment host to install the AWS Load Balancer Controller and application chart.
+Root stack **`main.yml`** provisions AWS infra through nested templates under **`modules/`**. Application Helm (frontend, backend, engine, Keycloak) is **not** in CloudFormation — use **`Jenkinsfile.helm`** ([HELM-DEPLOY.md](HELM-DEPLOY.md)).
 
-The AWS Load Balancer Controller owns the application ALB and target group. It registers worker-node instances through the frontend NodePort Service and reconciles membership as nodes change.
+## Module layout
 
-## Module Layout
+| Template | Role |
+|----------|------|
+| `modules/network-skeleton` | VPC, subnets, IGW, NAT |
+| `modules/eks` | EKS cluster, node groups, addons, ALB controller Pod Identity IAM |
+| `modules/db` | Secrets Manager: `{prefix}/postgres`, `{prefix}/clickhouse` |
+| `modules/bastion` | Bastion EC2, EKS access, S3 bootstrap assets → `databases` StatefulSets |
+| `modules/alb` | Internet ALB :8080 / :8081 / :8083 → NodePorts 30080 / 30081 / 30083 |
+| `modules/s3`, `glue`, `athena`, `iam` | Data lake + analytics + bastion role |
 
-| Template | Resources |
-| --- | --- |
-| `modules/network-skeleton/template.yaml` | VPC, subnets, internet gateway, routes, one NAT gateway/EIP |
-| `modules/bastion/template.yaml` | Bastion SG, EKS access entry, EC2, EIP; downloads bootstrap assets from S3 |
-| `modules/bastion/scripts/cluster-bootstrap.sh` | kubectl setup, node labels, DB install (systemd on bastion) |
-| `modules/bastion/manifests/databases.yaml` | In-cluster Postgres and ClickHouse |
-| `modules/eks/template.yaml` | EKS cluster, multi-AZ node groups, IAM roles, node security group, add-ons, and controller identity |
-| `modules/alb/template.yaml` | alb creation, target group creation and attachment of target group |
-| `modules/db/template.yaml` | Secrets Manager credentials for in-cluster databases |
-| `modules/spendsmart/template.yaml` | Optional private deployment host, EKS deployment access, Helm releases, and frontend Ingress |
-| `modules/s3/template.yaml` | Data and Athena-results bucket |
-| `modules/glue/template.yaml` | Glue database and service role |
-| `modules/athena/template.yaml` | Athena workgroup |
-| `modules/iam/template.yaml` | Analytics role/policy and bastion EC2 role |
+## Traffic
 
-`main.yml` is the deployment entrypoint. Run `aws cloudformation package` to upload the child templates and generate the deployable parent template.
-
-## Architecture
-
-```mermaid
-flowchart TB
-  Internet((Internet)) --> IGW[Internet Gateway]
-  IGW --> Pub[Two public subnets]
-  Pub --> NAT[NAT Gateway]
-  NAT --> Priv[Two private subnets]
-  Priv --> EKS[EKS cluster\nprivate API endpoint]
-  EKS --> NG1[Managed node group 1]
-  EKS --> NG2[Managed node group 2]
-  NG1 --> Pod[SpendSmart pods]
-  NG2 --> Pod
-  Pod -->|NodePort service| IngressALB[Controller-managed ALB and target group]
-  EKS --> PI[Pod Identity Agent]
-  PI --> LBC[AWS Load Balancer Controller\ninstalled with Helm]
-  LBC -->|AWS API via Pod Identity| IngressALB
-  EKS --> Bastion[Bastion\noptional]
-  EKS --> S3[S3 data and Athena results]
-  Glue[Glue database and role] --> S3
-  Athena[Athena workgroup] --> S3
-  Analytics[Analytics IAM role and policy] --> Glue
-  Analytics --> Athena
+```text
+Internet → ALB (CFN) → EC2 workers (NodePort) → spendsmart pods (Helm, post-infra)
 ```
 
-### CloudFormation-managed resources
+Bastion bootstrap labels nodes (`spendsmart.io/workload=*`) and installs Postgres/ClickHouse in **`databases`**.
 
-- Network: VPC, two public and two private subnets, internet gateway, public routing, one NAT gateway/EIP, and shared private routing.
-- Access: optional bastion (IAM role in `modules/iam`), security group, EKS access entry, EC2, optional EIP. Bootstrap is async (no CloudFormation WaitCondition).
-- EKS: cluster, cluster/node roles, worker security group, two managed node groups eligible in both private subnets, and the `vpc-cni`, `kube-proxy`, `coredns`, and `eks-pod-identity-agent` add-ons.
-- Controller identity: IAM role with the AWS Load Balancer Controller permissions policy and an EKS Pod Identity association for the configured Kubernetes namespace/service account.
-- Optional application install: private Helm deployment host and an EKS access entry used to install the controller, application chart, and Ingress.
-- Data and analytics: S3 bucket deleted during rollback/stack deletion when empty, Glue database/role, Athena workgroup, and analytics IAM role/managed policy.
+## Key outputs
 
-### Helm/Kubernetes-managed resources
+| Output | Use |
+|--------|-----|
+| `AlbDnsName`, `FrontendUrl`, `BackendUrl`, `KeycloakUrl` | App URLs after Helm |
+| `BastionInstanceId` | SSM / Helm deploy target |
+| `EksClusterName`, `EksConfigureKubectl` | kubectl |
+| Db / S3 / Glue / Athena / Analytics | Data plane |
 
-- AWS Load Balancer Controller Deployment and service account. Pod Identity supplies AWS credentials; do not put AWS access keys in chart values or Kubernetes Secrets.
-- SpendSmart Deployments, Services, and refresh CronJob from the application chart, plus a frontend Ingress applied by the deployment module.
-- The Ingress uses `target-type: instance`; the frontend Service is changed to NodePort, and the controller registers eligible EC2 worker instances in its managed target group.
+## Lifecycle
 
-Application deployment is disabled by default. Before enabling it, create the `spendsmart` namespace and the chart's image-pull/application Secrets. The deployment role is cluster-admin scoped while the private host installs the controller's cluster-level RBAC and application resources.
-
-## ALB Responsibilities
-
-The controller creates the ALB, listener, security groups, and target group from the Ingress. There is no separate CloudFormation-managed ALB with an unattached target group. The Ingress `ADDRESS` contains the application ALB DNS name after reconciliation.
-
-## CloudFormation Outputs
-
-CloudFormation outputs are strings. Values representing Terraform maps/lists are JSON-encoded strings; conditional bastion outputs are absent when `BastionEnabled` is false.
-
-| Output key | Value |
-| --- | --- |
-| `VpcId` | VPC ID |
-| `VpcCidr` | VPC CIDR |
-| `PublicSubnetIds` | JSON object mapping AZ names to public subnet IDs |
-| `PrivateSubnetIds` | JSON object mapping AZ names to private subnet IDs |
-| `NatGatewayIds` | JSON object mapping AZ names to NAT IDs; `{}` when NAT is disabled |
-| `InternetGatewayId` | Internet gateway ID |
-| `BastionInstanceId` | Bastion instance ID, when enabled |
-| `BastionSecurityGroupId` | Bastion security group ID, when enabled |
-| `SshKeyPairName` | Existing EC2 key-pair name |
-| `BastionPublicIp` | Bastion public IP, when enabled |
-| `EksClusterName` | EKS cluster name |
-| `EksClusterEndpoint` | EKS API endpoint |
-| `EksClusterArn` | EKS cluster ARN |
-| `EksClusterSecurityGroupId` | EKS cluster security group ID |
-| `EksNodesSecurityGroupId` | Additional worker-node security group ID |
-| `EksNodeGroupNames` | JSON array of managed node-group names |
-| `EksConfigureKubectl` | `aws eks update-kubeconfig` command |
-| `AlbControllerRoleArn` | Controller IAM role ARN for Pod Identity |
-| `AlbControllerNamespace` | Controller namespace configured for the association |
-| `AlbControllerServiceAccountName` | Controller service-account name configured for the association |
-| `AlbControllerVersion` | Controller release to align with the IAM policy and Helm chart |
-| `AlbDnsName` | Application ALB DNS |
-| `SpendSmartFrontendUrl` | `http://<AlbDns>:8080` (when `DeploySpendSmart=true`) |
-| `SpendSmartBackendUrl` | `http://<AlbDns>:8081` |
-| `SpendSmartKeycloakUrl` | `http://<AlbDns>:8083` |
-| `BastionInstanceId` | Bastion (bootstrap + admin access) |
-| `BucketName` | S3 bucket name |
-| `DataLocation` | S3 URI for the data prefix |
-| `AthenaOutputLocation` | S3 URI for Athena query results |
-| `GlueDatabaseName` | Glue database name |
-| `GlueRoleArn` | Glue service role ARN |
-| `AthenaWorkgroupName` | Athena workgroup name |
-| `AnalyticsIamRoleName` | Analytics IAM role name |
-| `AnalyticsIamRoleArn` | Analytics IAM role ARN |
-| `AnalyticsIamPolicyName` | Analytics IAM managed policy name |
-| `AnalyticsIamPolicyArn` | Analytics IAM managed policy ARN |
-
-SpendSmart is deployed by nested stack **`modules/spendsmart`** inside **`main.yml`** (`DeploySpendSmart=true`).
-
-## Resource Lifecycle
-
-1. `bash scripts/sync-bastion-assets.sh <bucket>` then package/deploy **`main.yml`** (Jenkins or CLI; Harbor via `deploy/harbor.env` or Jenkins `harbor-creds`).
-2. Wait for bastion bootstrap (`databases` pods) and **SpendSmart** `DeploymentHost` CFN signal.
-3. Open stack outputs `SpendSmartFrontendUrl`, `SpendSmartBackendUrl`, `SpendSmartKeycloakUrl`.
+1. `bash scripts/sync-bastion-assets.sh <bucket>` → package → `bash scripts/cfn-deploy.sh` (or `Jenkinsfile`).
+2. Wait for bastion: `kubectl get po -n databases`.
+3. `Jenkinsfile.helm` or `scripts/helm/run-on-bastion-via-ssm.sh`.

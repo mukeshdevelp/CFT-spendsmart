@@ -25,9 +25,9 @@ if [[ -z "$ALB_DNS" || "$ALB_DNS" == "None" ]]; then
 fi
 
 # Prefer stack outputs when SpendSmart module has run; else build from AlbDnsName + ports.
-FRONTEND_URL="$(fetch_output SpendSmartFrontendUrl)"
-BACKEND_URL="$(fetch_output SpendSmartBackendUrl)"
-KEYCLOAK_URL="$(fetch_output SpendSmartKeycloakUrl)"
+FRONTEND_URL="$(fetch_output FrontendUrl)"
+BACKEND_URL="$(fetch_output BackendUrl)"
+KEYCLOAK_URL="$(fetch_output KeycloakUrl)"
 
 [[ -z "$FRONTEND_URL" || "$FRONTEND_URL" == "None" ]] && FRONTEND_URL="http://${ALB_DNS}:${FRONTEND_PORT}"
 [[ -z "$BACKEND_URL" || "$BACKEND_URL" == "None" ]] && BACKEND_URL="http://${ALB_DNS}:${BACKEND_PORT}"

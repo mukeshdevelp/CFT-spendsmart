@@ -1,0 +1,124 @@
+pipeline {
+  agent any
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '15'))
+  }
+
+  parameters {
+    choice(name: 'AWS_REGION', choices: ['us-east-1', 'ap-south-1'], description: 'Stack region')
+    string(name: 'CFN_STACK_NAME', defaultValue: 'spendsmart-dev', description: 'Infra stack name (must be CREATE_COMPLETE)')
+    string(name: 'CFN_TEMPLATE_BUCKET', defaultValue: 'spendsmart-cfn-packages', description: 'S3 bucket for bastion-assets')
+    string(name: 'NAME_PREFIX', defaultValue: 'spendsmart-dev', description: 'NamePrefix / SM path prefix')
+    string(name: 'EKS_CLUSTER_NAME', defaultValue: 'spendsmart', description: 'EKS cluster name')
+    string(name: 'CREDENTIAL_HARBOR', defaultValue: 'harbor-creds', description: 'Jenkins user/pass for harbor.ldc.opstree.dev')
+    string(name: 'CREDENTIAL_GPG_KEY', defaultValue: 'spendsmart-gpg-key', description: 'Secret text: backend GPG_KEY (same as local encryption-key)')
+    string(name: 'BASTION_INSTANCE_ID', defaultValue: '', description: 'Optional; default from stack output BastionInstanceId')
+  }
+
+  environment {
+    AWS_REGION = "${params.AWS_REGION}"
+    AWS_DEFAULT_REGION = "${params.AWS_REGION}"
+    CFN_STACK_NAME = "${params.CFN_STACK_NAME}"
+    CFN_TEMPLATE_BUCKET = "${params.CFN_TEMPLATE_BUCKET}"
+    NAME_PREFIX = "${params.NAME_PREFIX}"
+    EKS_CLUSTER_NAME = "${params.EKS_CLUSTER_NAME}"
+    BASTION_INSTANCE_ID = "${params.BASTION_INSTANCE_ID}"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
+    }
+
+    stage('Preflight infra stack') {
+      steps {
+        script {
+          withAwsCredentials {
+            sh '''
+            set -eu
+            STATUS=$(aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+              --query 'Stacks[0].StackStatus' --output text)
+            case "$STATUS" in
+              CREATE_COMPLETE|UPDATE_COMPLETE) ;;
+              *) echo "Infra stack must be CREATE_COMPLETE or UPDATE_COMPLETE, got: $STATUS"; exit 1 ;;
+            esac
+            aws cloudformation describe-stacks --stack-name "${CFN_STACK_NAME}" --region "${AWS_REGION}" \
+              --query 'Stacks[0].Outputs[?OutputKey==`BastionInstanceId`].OutputValue' --output text | grep -q .
+            '''
+          }
+        }
+      }
+    }
+
+    stage('Sync helm script to S3') {
+      steps {
+        script {
+          withAwsCredentials {
+            sh 'bash scripts/sync-bastion-assets.sh "${CFN_TEMPLATE_BUCKET}" "${AWS_REGION}"'
+          }
+        }
+      }
+    }
+
+    stage('Deploy SpendSmart via bastion SSM') {
+      steps {
+        script {
+          def harborCred = params.CREDENTIAL_HARBOR?.trim() ?: 'harbor-creds'
+          def gpgCred = params.CREDENTIAL_GPG_KEY?.trim() ?: 'spendsmart-gpg-key'
+          withCredentials([
+            usernamePassword(credentialsId: harborCred, usernameVariable: 'HARBOR_USERNAME', passwordVariable: 'HARBOR_PASSWORD'),
+            string(credentialsId: gpgCred, variable: 'GPG_KEY'),
+          ]) {
+            withAwsCredentials {
+              sh '''
+              set -eu
+              export CFN_STACK_NAME="${CFN_STACK_NAME}"
+              export CFN_TEMPLATE_BUCKET="${CFN_TEMPLATE_BUCKET}"
+              export NAME_PREFIX="${NAME_PREFIX}"
+              export EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME}"
+              export HARBOR_SERVER="${HARBOR_SERVER:-harbor.ldc.opstree.dev}"
+              if [ -n "${BASTION_INSTANCE_ID}" ]; then export BASTION_INSTANCE_ID="${BASTION_INSTANCE_ID}"; fi
+              bash scripts/helm/run-on-bastion-via-ssm.sh scripts/helm/deploy-spendsmart-on-bastion.sh
+              '''
+            }
+          }
+        }
+      }
+    }
+
+    stage('URLs') {
+      steps {
+        script {
+          withAwsCredentials {
+            sh '''
+            eval "$(bash scripts/cfn-alb-urls.sh)"
+            echo "Frontend:  ${FRONTEND_URL}"
+            echo "Backend:   ${BACKEND_URL}"
+            echo "Keycloak:  ${KEYCLOAK_URL}"
+            '''
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    failure {
+      sh 'echo "Helm deploy failed — on bastion: sudo tail -100 /var/log/spendsmart-helm-deploy.log"'
+    }
+  }
+}
+
+void withAwsCredentials(Closure body) {
+  withCredentials([[
+    $class: 'AmazonWebServicesCredentialsBinding',
+    credentialsId: 'aws-creds',
+    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY',
+  ]]) {
+    body()
+  }
+}

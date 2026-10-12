@@ -319,7 +319,7 @@ Resources:
     - Alb
     - Bastion
     Properties:
-      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/2f93644cde0bc6e6bae522a134dd15b1.template
+      TemplateURL: https://s3.amazonaws.com/spendsmart-cfn-packages/1a5cb465a603f35bd6c763acb57dd9d8.template
       Parameters:
         NamePrefix:
           Ref: NamePrefix

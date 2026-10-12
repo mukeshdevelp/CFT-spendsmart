@@ -43,16 +43,6 @@ pipeline {
       defaultValue: true,
       description: 'Wait for stack create/update to finish'
     )
-    booleanParam(
-      name: 'DEPLOY_SPENDSMART',
-      defaultValue: true,
-      description: 'Nested SpendSmart stack (Helm + Keycloak); requires Harbor credentials'
-    )
-    string(
-      name: 'CREDENTIAL_HARBOR',
-      defaultValue: 'harbor-creds',
-      description: 'Jenkins Username/password — same as docker login harbor.ldc.opstree.dev'
-    )
   }
 
   environment {
@@ -90,25 +80,15 @@ pipeline {
     
     stage('Prepare deploy parameters') {
       steps {
-        script {
-          def harborCredId = params.CREDENTIAL_HARBOR?.trim() ?: 'harbor-creds'
-          withCredentials([usernamePassword(
-            credentialsId: harborCredId,
-            usernameVariable: 'HARBOR_USERNAME',
-            passwordVariable: 'HARBOR_PASSWORD',
-          )]) {
-            sh '''
-            set -eu
-            export EXISTING_EC2_KEY_NAME="${EXISTING_EC2_KEY_NAME}"
-            export BASTION_SSH_CIDRS="${BASTION_SSH_CIDRS}"
-            export S3_BUCKET_NAME="${S3_BUCKET_NAME}"
-            export CFN_TEMPLATE_BUCKET="${CFN_TEMPLATE_BUCKET}"
-            export DEPLOY_SPENDSMART="${DEPLOY_SPENDSMART}"
-            export CFN_PARAMETERS_OUT="${DEPLOY_PARAMETERS}"
-            python3 scripts/merge-cfn-parameters.py
-            '''
-          }
-        }
+        sh '''
+        set -eu
+        export EXISTING_EC2_KEY_NAME="${EXISTING_EC2_KEY_NAME}"
+        export BASTION_SSH_CIDRS="${BASTION_SSH_CIDRS}"
+        export S3_BUCKET_NAME="${S3_BUCKET_NAME}"
+        export CFN_TEMPLATE_BUCKET="${CFN_TEMPLATE_BUCKET}"
+        export CFN_PARAMETERS_OUT="${DEPLOY_PARAMETERS}"
+        python3 scripts/merge-cfn-parameters.py
+        '''
       }
     }
 

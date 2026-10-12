@@ -1,6 +1,6 @@
 # SpendSmart One-Click Deployment Guide
 
-This guide deploys the modular CloudFormation root stack in `main.yml`. Its nested templates are under `modules/`; package them to S3 before deployment. SpendSmart Helm deployment is opt-in because its image-pull and application Secrets must already exist in EKS. See [ARCHITECTURE.md](ARCHITECTURE.md) for the module layout and stack outputs.
+This guide deploys the **infra** CloudFormation root stack in `main.yml` (through in-cluster DBs on bastion). **Helm app deploy** is a second step: [HELM-DEPLOY.md](HELM-DEPLOY.md) / `Jenkinsfile.helm`.
 
 ## What Gets Deployed
 
@@ -14,9 +14,7 @@ This guide deploys the modular CloudFormation root stack in `main.yml`. Its nest
 | Load Balancer Controller IAM role and Pod Identity association | CloudFormation / EKS | Grants the controller AWS permissions without static credentials |
 | S3 bucket, Glue database/role, Athena workgroup, and analytics IAM resources | CloudFormation | Data storage, catalog/query, and analytics access |
 | Application ALB (8080 / 8081 / 8083) | CloudFormation `modules/alb` | Frontend, backend, Keycloak listeners |
-| SpendSmart app (Helm + Keycloak) | CloudFormation `modules/spendsmart` | When `DeploySpendSmart=true` and Harbor params set |
-
-See [CLOUDFORMATION-SPENDSMART.md](CLOUDFORMATION-SPENDSMART.md) for Harbor and app URLs.
+| SpendSmart app (Helm + Keycloak) | `Jenkinsfile.helm` on bastion (SSM) | After infra + `databases` pods Ready |
 
 ## Pre-requisites
 
@@ -105,17 +103,21 @@ aws cloudformation describe-stack-events \
   --region us-east-1
 ```
 
-## Deploy SpendSmart (same stack)
+## Deploy SpendSmart (Helm — after infra)
 
-Set Harbor credentials (`deploy/harbor.env` or Jenkins `harbor-creds`). `parameters.json` defaults `DeploySpendSmart=true`.
+1. Confirm `kubectl get po -n databases` on bastion.
+2. Run **`Jenkinsfile.helm`** (credentials `harbor-creds`, `spendsmart-gpg-key`) or see [HELM-DEPLOY.md](HELM-DEPLOY.md).
 
 ```sh
-bash scripts/cfn-deploy-with-harbor.sh
+bash scripts/cfn-deploy.sh   # infra only
+# then helm job or:
+export HARBOR_USERNAME=... HARBOR_PASSWORD=... GPG_KEY=...
+bash scripts/helm/run-on-bastion-via-ssm.sh
 ```
 
-Stack outputs: `SpendSmartFrontendUrl` (:8080), `SpendSmartBackendUrl` (:8081), `SpendSmartKeycloakUrl` (:8083).
+URLs: stack outputs `FrontendUrl`, `BackendUrl`, `KeycloakUrl` (or `scripts/cfn-alb-urls.sh`).
 
-Deployment host logs (SSM): `sudo tail -f /var/log/spendsmart-helm-install.log`
+Bastion log: `sudo tail -f /var/log/spendsmart-helm-deploy.log`
 
 ## Troubleshooting
 
@@ -136,7 +138,7 @@ Deployment host logs (SSM): `sudo tail -f /var/log/spendsmart-helm-install.log`
 
 ## Delete and Cost Cleanup
 
-Remove application Ingress resources first so the controller can delete their ALBs and target groups, then delete the CloudFormation stack:
+App ALB is created by CloudFormation (`modules/alb`). Delete Helm releases on the cluster first if you want a clean teardown, then delete the CloudFormation stack:
 
 ```sh
 aws cloudformation delete-stack \
