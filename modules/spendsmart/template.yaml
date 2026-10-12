@@ -200,207 +200,229 @@ Resources:
         HttpTokens: required
         HttpPutResponseHopLimit: 2
       UserData:
-        Fn::Base64: !Sub |
-            #!/bin/bash
-            LOG=/var/log/spendsmart-helm-install.log
-            exec > >(tee -a "$LOG") 2>&1
-            signal_cfn() {
-              /opt/aws/bin/cfn-signal -e "$$1" --stack ${AWS::StackName} --resource DeploymentHost --region ${AWS::Region} --reason "$$2"
-            }
-            on_error() {
-              signal_cfn 1 "SpendSmart deploy failed at line $$1: $$(tail -c 3800 $$LOG)"
-            }
-            trap 'on_error $$LINENO' ERR
-            set -euo pipefail
-            dnf install -y git tar gzip aws-cfn-bootstrap python3
-            command -v curl >/dev/null || dnf install -y curl-minimal
-            curl -fsSL https://get.helm.sh/helm-v3.17.3-linux-amd64.tar.gz -o /tmp/helm.tar.gz
-            tar -xzf /tmp/helm.tar.gz -C /tmp && install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
-            cluster_version=$$(aws eks describe-cluster --name ${ClusterName} --region ${AWS::Region} --query 'cluster.version' --output text)
-            curl -fsSL "https://dl.k8s.io/release/v$cluster_version.0/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
-            chmod 0755 /usr/local/bin/kubectl
-            export KUBECONFIG=/root/.kube/config
-            mkdir -p /root/.kube
-            aws eks update-kubeconfig --name ${ClusterName} --region ${AWS::Region} --kubeconfig "$KUBECONFIG"
-            kubectl wait --for=condition=Ready node --all --timeout=900s
-            kubectl -n databases wait --for=condition=Ready pod -l app=clickhouse --timeout=900s
+        Fn::Base64:
+          Fn::Sub:
+            - |
+              #!/bin/bash
+              LOG=/var/log/spendsmart-helm-install.log
+              exec >>"$LOG" 2>&1
+              signal_cfn() {
+                /opt/aws/bin/cfn-signal -e "$1" --stack ${StackName} --resource DeploymentHost --region ${CfnRegion} --reason "$2"
+              }
+              on_error() {
+                signal_cfn 1 "SpendSmart deploy failed at line $1: $(tail -c 3800 "$LOG")"
+              }
+              trap 'on_error $LINENO' ERR
+              set -euo pipefail
+              dnf install -y git tar gzip aws-cfn-bootstrap python3
+              command -v curl >/dev/null || dnf install -y curl-minimal
+              curl -fsSL https://get.helm.sh/helm-v3.17.3-linux-amd64.tar.gz -o /tmp/helm.tar.gz
+              tar -xzf /tmp/helm.tar.gz -C /tmp && install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+              cluster_version=$(aws eks describe-cluster --name ${ClusterName} --region ${CfnRegion} --query 'cluster.version' --output text)
+              curl -fsSL "https://dl.k8s.io/release/v$cluster_version.0/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
+              chmod 0755 /usr/local/bin/kubectl
+              export KUBECONFIG=/root/.kube/config
+              mkdir -p /root/.kube
+              aws eks update-kubeconfig --name ${ClusterName} --region ${CfnRegion} --kubeconfig "$KUBECONFIG"
+              kubectl wait --for=condition=Ready node --all --timeout=900s
+              kubectl -n databases wait --for=condition=Ready pod -l app=clickhouse --timeout=900s
 
-            CH_JSON=$$(aws secretsmanager get-secret-value --secret-id '${ClickHouseSecretName}' --region ${AWS::Region} --query SecretString --output text)
-            CHPASS=$$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["password"])' "$$CH_JSON")
-            CHUSER=$$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["username"])' "$$CH_JSON")
-            CHDB=$$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["database"])' "$$CH_JSON")
-            GPG_KEY=$$(aws secretsmanager get-secret-value --secret-id '${NamePrefix}/spendsmart-encryption-key' --region ${AWS::Region} --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)["GPG_KEY"])')
+              CH_JSON=$(aws secretsmanager get-secret-value --secret-id '${ClickHouseSecretName}' --region ${CfnRegion} --query SecretString --output text)
+              CHPASS=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["password"])' "$CH_JSON")
+              CHUSER=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["username"])' "$CH_JSON")
+              CHDB=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["database"])' "$CH_JSON")
+              GPG_KEY=$(aws secretsmanager get-secret-value --secret-id '${EncryptionKeySecretName}' --region ${CfnRegion} --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)["GPG_KEY"])')
 
-            kubectl create namespace ${Namespace} --dry-run=client -o yaml | kubectl apply -f -
+              kubectl create namespace ${Namespace} --dry-run=client -o yaml | kubectl apply -f -
 
-            kubectl apply -f - <<CHSVC
-            apiVersion: v1
-            kind: Service
-            metadata:
-              name: clickhouse
-              namespace: ${Namespace}
-            spec:
-              type: ExternalName
-              externalName: clickhouse.databases.svc.cluster.local
-            CHSVC
+              kubectl apply -f - <<CHSVC
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: clickhouse
+                namespace: ${Namespace}
+              spec:
+                type: ExternalName
+                externalName: clickhouse.databases.svc.cluster.local
+              CHSVC
 
-            if aws secretsmanager get-secret-value --secret-id '${NamePrefix}/harbor-pull' --region ${AWS::Region} >/dev/null 2>&1; then
-              HARBOR_JSON=$$(aws secretsmanager get-secret-value --secret-id '${NamePrefix}/harbor-pull' --region ${AWS::Region} --query SecretString --output text)
-              HUSER=$$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["username"])' "$$HARBOR_JSON")
-              HPASS=$$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["password"])' "$$HARBOR_JSON")
-              HSERVER=$$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["server"])' "$$HARBOR_JSON")
-              kubectl -n ${Namespace} create secret docker-registry harbor-ldc-coe-regcred \
-                --docker-server="$HSERVER" \
-                --docker-username="$HUSER" \
-                --docker-password="$HPASS" \
+              if aws secretsmanager get-secret-value --secret-id '${HarborSecretName}' --region ${CfnRegion} >/dev/null 2>&1; then
+                HARBOR_JSON=$(aws secretsmanager get-secret-value --secret-id '${HarborSecretName}' --region ${CfnRegion} --query SecretString --output text)
+                HUSER=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["username"])' "$HARBOR_JSON")
+                HPASS=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["password"])' "$HARBOR_JSON")
+                HSERVER=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["server"])' "$HARBOR_JSON")
+                kubectl -n ${Namespace} create secret docker-registry harbor-ldc-coe-regcred \
+                  --docker-server="$HSERVER" \
+                  --docker-username="$HUSER" \
+                  --docker-password="$HPASS" \
+                  --dry-run=client -o yaml | kubectl apply -f -
+              fi
+
+              kubectl -n ${Namespace} create secret generic encryption-key \
+                --from-literal=GPG_KEY="$GPG_KEY" \
                 --dry-run=client -o yaml | kubectl apply -f -
-            fi
+              kubectl -n ${Namespace} create secret generic clickhouse \
+                --from-literal=CLICKHOUSE_HOST=${ClickHouseHost} \
+                --from-literal=CLICKHOUSE_PORT=${ClickHouseHttpPort} \
+                --from-literal=CLICKHOUSE_USER="$CHUSER" \
+                --from-literal=CLICKHOUSE_PASSWORD="$CHPASS" \
+                --from-literal=CLICKHOUSE_DATABASE="$CHDB" \
+                --from-literal=CLICKHOUSE_TABLE=${ClickHouseTable} \
+                --from-literal=CLICKHOUSE_TLS=${ClickHouseTls} \
+                --dry-run=client -o yaml | kubectl apply -f -
+              kubectl -n ${Namespace} create secret generic clickhouse-db \
+                --from-literal=CLICKHOUSE_HOST=${ClickHouseHost} \
+                --from-literal=CLICKHOUSE_PORT=${ClickHouseHttpPort} \
+                --from-literal=CLICKHOUSE_USER="$CHUSER" \
+                --from-literal=CLICKHOUSE_PASSWORD="$CHPASS" \
+                --from-literal=CLICKHOUSE_DATABASE="$CHDB" \
+                --from-literal=CLICKHOUSE_TABLE=${ClickHouseTable} \
+                --dry-run=client -o yaml | kubectl apply -f -
 
-            kubectl -n ${Namespace} create secret generic encryption-key \
-              --from-literal=GPG_KEY="$GPG_KEY" \
-              --dry-run=client -o yaml | kubectl apply -f -
-            kubectl -n ${Namespace} create secret generic clickhouse \
-              --from-literal=CLICKHOUSE_HOST=${ClickHouseHost} \
-              --from-literal=CLICKHOUSE_PORT=${ClickHouseHttpPort} \
-              --from-literal=CLICKHOUSE_USER="$CHUSER" \
-              --from-literal=CLICKHOUSE_PASSWORD="$CHPASS" \
-              --from-literal=CLICKHOUSE_DATABASE="$CHDB" \
-              --from-literal=CLICKHOUSE_TABLE=${ClickHouseTable} \
-              --from-literal=CLICKHOUSE_TLS=${ClickHouseTls} \
-              --dry-run=client -o yaml | kubectl apply -f -
-            kubectl -n ${Namespace} create secret generic clickhouse-db \
-              --from-literal=CLICKHOUSE_HOST=${ClickHouseHost} \
-              --from-literal=CLICKHOUSE_PORT=${ClickHouseHttpPort} \
-              --from-literal=CLICKHOUSE_USER="$CHUSER" \
-              --from-literal=CLICKHOUSE_PASSWORD="$CHPASS" \
-              --from-literal=CLICKHOUSE_DATABASE="$CHDB" \
-              --from-literal=CLICKHOUSE_TABLE=${ClickHouseTable} \
-              --dry-run=client -o yaml | kubectl apply -f -
-
-            API_URL="http://${AlbDnsName}:${BackendListenerPort}"
-            KC_URL="http://${AlbDnsName}:${KeycloakListenerPort}"
-            cat >/tmp/client-a-values.yaml <<EOF
-            imagePullSecrets:
-              - name: harbor-ldc-coe-regcred
-            backend:
-              enabled: true
-              image:
-                repository: harbor.ldc.opstree.dev/coe/uniteconpro-backend-prod
-                tag: latest
-              nodeSelector:
-                spendsmart.io/workload: backend
-              service:
-                type: NodePort
-              annotations: {}
-            frontend:
-              enabled: true
-              image:
-                repository: harbor.ldc.opstree.dev/coe/uniteconpro-frontend-prod
-                tag: latest
-              nodeSelector:
-                spendsmart.io/workload: frontend
-              service:
-                type: NodePort
-              configMap:
-                name: uniteconpro-frontend
-                data:
-                  VITE_API_BASE_URL: "$API_URL"
-                  VITE_CLOUD_SENTRY_API_BASE_URL: ""
-                  VITE_KEYCLOAK_CLIENT_ID: spendsmart-frontend
-                  VITE_KEYCLOAK_REALM: spendsmart
-                  VITE_KEYCLOAK_URL: "$KC_URL"
-              nginx:
+              API_URL="http://${AlbDnsName}:${BackendListenerPort}"
+              KC_URL="http://${AlbDnsName}:${KeycloakListenerPort}"
+              cat >/tmp/client-a-values.yaml <<EOF
+              imagePullSecrets:
+                - name: harbor-ldc-coe-regcred
+              backend:
                 enabled: true
+                image:
+                  repository: harbor.ldc.opstree.dev/coe/uniteconpro-backend-prod
+                  tag: latest
+                nodeSelector:
+                  spendsmart.io/workload: backend
+                service:
+                  type: NodePort
+                annotations: {}
+              frontend:
+                enabled: true
+                image:
+                  repository: harbor.ldc.opstree.dev/coe/uniteconpro-frontend-prod
+                  tag: latest
+                nodeSelector:
+                  spendsmart.io/workload: frontend
+                service:
+                  type: NodePort
                 configMap:
-                  name: spendsmart-frontend-nginx
-              annotations: {}
-            cloudsentry:
-              enabled: false
-            engine:
-              enabled: true
-              image:
-                repository: harbor.ldc.opstree.dev/coe/uniteconpro-engine-dev
-                tag: latest
-              schedule: "5 11,23 * * *"
-              nodeSelector:
-                spendsmart.io/workload: backend
-            EOF
+                  name: uniteconpro-frontend
+                  data:
+                    VITE_API_BASE_URL: "$API_URL"
+                    VITE_CLOUD_SENTRY_API_BASE_URL: ""
+                    VITE_KEYCLOAK_CLIENT_ID: spendsmart-frontend
+                    VITE_KEYCLOAK_REALM: spendsmart
+                    VITE_KEYCLOAK_URL: "$KC_URL"
+                nginx:
+                  enabled: true
+                  configMap:
+                    name: spendsmart-frontend-nginx
+                annotations: {}
+              cloudsentry:
+                enabled: false
+              engine:
+                enabled: true
+                image:
+                  repository: harbor.ldc.opstree.dev/coe/uniteconpro-engine-dev
+                  tag: latest
+                schedule: "5 11,23 * * *"
+                nodeSelector:
+                  spendsmart.io/workload: backend
+              EOF
 
-            kubectl apply -f - <<KEYCLOAK
-            apiVersion: apps/v1
-            kind: Deployment
-            metadata:
-              name: keycloak
-              namespace: ${Namespace}
-            spec:
-              replicas: 1
-              selector:
-                matchLabels:
-                  app: keycloak
-              template:
-                metadata:
-                  labels:
+              kubectl apply -f - <<KEYCLOAK
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: keycloak
+                namespace: ${Namespace}
+              spec:
+                replicas: 1
+                selector:
+                  matchLabels:
                     app: keycloak
-                spec:
-                  nodeSelector:
-                    spendsmart.io/workload: frontend
-                  containers:
-                    - name: keycloak
-                      image: quay.io/keycloak/keycloak:latest
-                      args: ["start-dev"]
-                      env:
-                        - name: KEYCLOAK_ADMIN
-                          value: admin
-                        - name: KEYCLOAK_ADMIN_PASSWORD
-                          value: '${KeycloakAdminPassword}'
-                        - name: KC_HTTP_PORT
-                          value: "8080"
-                      ports:
-                        - containerPort: 8080
-            ---
-            apiVersion: v1
-            kind: Service
-            metadata:
-              name: keycloak
-              namespace: ${Namespace}
-            spec:
-              type: NodePort
-              selector:
-                app: keycloak
-              ports:
-                - name: http
-                  port: 8080
-                  targetPort: 8080
-                  nodePort: ${KeycloakNodePort}
-            KEYCLOAK
-            kubectl -n ${Namespace} rollout status deployment/keycloak --timeout=900s
+                template:
+                  metadata:
+                    labels:
+                      app: keycloak
+                  spec:
+                    nodeSelector:
+                      spendsmart.io/workload: frontend
+                    containers:
+                      - name: keycloak
+                        image: quay.io/keycloak/keycloak:latest
+                        args: ["start-dev"]
+                        env:
+                          - name: KEYCLOAK_ADMIN
+                            value: admin
+                          - name: KEYCLOAK_ADMIN_PASSWORD
+                            value: '${KeycloakAdminPassword}'
+                          - name: KC_HTTP_PORT
+                            value: "8080"
+                        ports:
+                          - containerPort: 8080
+              ---
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: keycloak
+                namespace: ${Namespace}
+              spec:
+                type: NodePort
+                selector:
+                  app: keycloak
+                ports:
+                  - name: http
+                    port: 8080
+                    targetPort: 8080
+                    nodePort: ${KeycloakNodePort}
+              KEYCLOAK
+              kubectl -n ${Namespace} rollout status deployment/keycloak --timeout=900s
 
-            git clone --depth 1 --branch ${ChartBranch} ${ChartRepository} /opt/helm-charts
-            helm upgrade --install spendsmart /opt/helm-charts/charts/spendsmart \
-              --namespace ${Namespace} \
-              --values /tmp/client-a-values.yaml \
-              --wait --timeout 30m
+              git clone --depth 1 --branch ${ChartBranch} ${ChartRepository} /opt/helm-charts
+              helm upgrade --install spendsmart /opt/helm-charts/charts/spendsmart \
+                --namespace ${Namespace} \
+                --values /tmp/client-a-values.yaml \
+                --wait --timeout 30m
 
-            patch_np() {
-              local svc="$1" np="$2" port="$3" target="$4"
-              kubectl patch svc "$svc" -n ${Namespace} --type merge -p "{\"spec\":{\"type\":\"NodePort\",\"ports\":[{\"name\":\"http\",\"port\":$port,\"targetPort\":$target,\"nodePort\":$np,\"protocol\":\"TCP\"}]}}"
-            }
-            patch_np spendsmart-frontend ${FrontendNodePort} 80 80
-            patch_np spendsmart-backend ${BackendNodePort} 80 8000
+              patch_np() {
+                local svc="$1" np="$2" port="$3" target="$4"
+                kubectl patch svc "$svc" -n ${Namespace} --type merge -p "{\"spec\":{\"type\":\"NodePort\",\"ports\":[{\"name\":\"http\",\"port\":$port,\"targetPort\":$target,\"nodePort\":$np,\"protocol\":\"TCP\"}]}}"
+              }
+              patch_np spendsmart-frontend ${FrontendNodePort} 80 80
+              patch_np spendsmart-backend ${BackendNodePort} 80 8000
 
-            echo "=== spendsmart namespace secrets (local guide parity) ==="
-            kubectl get secrets -n ${Namespace} \
-              harbor-ldc-coe-regcred encryption-key clickhouse clickhouse-db
-            CH_KEYS=$$(kubectl get secret clickhouse -n ${Namespace} -o json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]))')
-            CHDB_KEYS=$$(kubectl get secret clickhouse-db -n ${Namespace} -o json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]))')
-            test "$$CH_KEYS" = "7" || { echo "clickhouse secret must have 7 keys (local guide)"; exit 1; }
-            test "$$CHDB_KEYS" = "6" || { echo "clickhouse-db secret must have 6 keys (local guide)"; exit 1; }
-            echo "=== spendsmart configmaps (from Helm chart) ==="
-            kubectl get configmaps -n ${Namespace} uniteconpro-frontend spendsmart-frontend-nginx 2>/dev/null || \
-              kubectl get configmaps -n ${Namespace}
+              echo "=== spendsmart namespace secrets (local guide parity) ==="
+              kubectl get secrets -n ${Namespace} \
+                harbor-ldc-coe-regcred encryption-key clickhouse clickhouse-db
+              CH_KEYS=$(kubectl get secret clickhouse -n ${Namespace} -o json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]))')
+              CHDB_KEYS=$(kubectl get secret clickhouse-db -n ${Namespace} -o json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]))')
+              test "$CH_KEYS" = "7" || { echo "clickhouse secret must have 7 keys (local guide)"; exit 1; }
+              test "$CHDB_KEYS" = "6" || { echo "clickhouse-db secret must have 6 keys (local guide)"; exit 1; }
+              echo "=== spendsmart configmaps (from Helm chart) ==="
+              kubectl get configmaps -n ${Namespace} uniteconpro-frontend spendsmart-frontend-nginx 2>/dev/null || \
+                kubectl get configmaps -n ${Namespace}
 
-            kubectl -n ${Namespace} get deploy,svc,pods,configmaps
-            signal_cfn 0 "SpendSmart frontend/backend/keycloak deployed"
+              kubectl -n ${Namespace} get deploy,svc,pods,configmaps
+              signal_cfn 0 "SpendSmart frontend/backend/keycloak deployed"
+            - StackName: !Ref AWS::StackName
+              CfnRegion: !Ref AWS::Region
+              ClusterName: !Ref ClusterName
+              ClickHouseSecretName: !Ref ClickHouseSecretName
+              EncryptionKeySecretName: !Sub '${NamePrefix}/spendsmart-encryption-key'
+              HarborSecretName: !Sub '${NamePrefix}/harbor-pull'
+              Namespace: !Ref Namespace
+              ClickHouseHost: !Ref ClickHouseHost
+              ClickHouseHttpPort: !Ref ClickHouseHttpPort
+              ClickHouseTable: !Ref ClickHouseTable
+              ClickHouseTls: !Ref ClickHouseTls
+              AlbDnsName: !Ref AlbDnsName
+              BackendListenerPort: !Ref BackendListenerPort
+              KeycloakListenerPort: !Ref KeycloakListenerPort
+              KeycloakAdminPassword: !Ref KeycloakAdminPassword
+              ChartBranch: !Ref ChartBranch
+              ChartRepository: !Ref ChartRepository
+              FrontendNodePort: !Ref FrontendNodePort
+              BackendNodePort: !Ref BackendNodePort
+              KeycloakNodePort: !Ref KeycloakNodePort
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-deployment'
