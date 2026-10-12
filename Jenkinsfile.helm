@@ -13,7 +13,8 @@ pipeline {
     string(name: 'CFN_TEMPLATE_BUCKET', defaultValue: 'spendsmart-cfn-packages', description: 'S3 bastion-assets bucket')
     string(name: 'NAME_PREFIX', defaultValue: 'spendsmart-dev', description: 'NamePrefix / SM path prefix')
     string(name: 'EKS_CLUSTER_NAME', defaultValue: 'spendsmart', description: 'EKS cluster name')
-    booleanParam(name: 'MIRROR_TO_ECR', defaultValue: true, description: 'Pull Harbor on docker agent and push to ECR')
+    booleanParam(name: 'MIRROR_TO_ECR', defaultValue: true, description: 'Pull Harbor and push to ECR (Jenkins agent needs docker + aws CLI)')
+    string(name: 'MIRROR_AGENT_LABEL', defaultValue: '', description: 'Optional Jenkins node label for mirror only (empty = same agent as this job)')
     string(name: 'ECR_REPO_PREFIX', defaultValue: 'spendsmart', description: 'ECR repos: {prefix}/backend|frontend|engine')
     string(name: 'HARBOR_TAG', defaultValue: 'latest', description: 'Tag to pull from Harbor when mirroring')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'ECR deploy tag (empty = BUILD_NUMBER when mirroring, else latest)')
@@ -57,23 +58,34 @@ pipeline {
 
     stage('Mirror Harbor to ECR') {
       when { expression { return params.MIRROR_TO_ECR } }
-      agent { label 'docker' }
       steps {
-        checkout scm
         script {
           def harborCred = params.CREDENTIAL_HARBOR?.trim() ?: 'harbor-creds'
-          withCredentials([
-            usernamePassword(credentialsId: harborCred, usernameVariable: 'HARBOR_USERNAME', passwordVariable: 'HARBOR_PASSWORD'),
-          ]) {
-            withAwsCredentials {
-              sh '''
-              set -eu
-              export IMAGE_TAG="${RESOLVED_IMAGE_TAG}"
-              export ECR_REPO_PREFIX="${ECR_REPO_PREFIX}"
-              export HARBOR_TAG="${HARBOR_TAG}"
-              bash scripts/helm/mirror-harbor-to-ecr.sh
-              '''
+          def mirrorLabel = params.MIRROR_AGENT_LABEL?.trim()
+          def mirrorSh = '''
+            set -eu
+            command -v docker >/dev/null || { echo "docker not on this agent — set MIRROR_TO_ECR=false after PC mirror, or MIRROR_AGENT_LABEL"; exit 1; }
+            export IMAGE_TAG="${RESOLVED_IMAGE_TAG}"
+            export ECR_REPO_PREFIX="${ECR_REPO_PREFIX}"
+            export HARBOR_TAG="${HARBOR_TAG}"
+            bash scripts/helm/mirror-harbor-to-ecr.sh
+          '''
+          def runMirror = {
+            withCredentials([
+              usernamePassword(credentialsId: harborCred, usernameVariable: 'HARBOR_USERNAME', passwordVariable: 'HARBOR_PASSWORD'),
+            ]) {
+              withAwsCredentials {
+                sh mirrorSh
+              }
             }
+          }
+          if (mirrorLabel) {
+            node(mirrorLabel) {
+              checkout scm
+              runMirror()
+            }
+          } else {
+            runMirror()
           }
         }
       }

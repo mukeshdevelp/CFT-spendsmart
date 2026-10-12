@@ -4,12 +4,13 @@ Infra (`Jenkinsfile` / `scripts/cfn-deploy.sh`) must be **CREATE_COMPLETE** with
 
 ## One Jenkins job: `Jenkinsfile.helm`
 
-1. **Mirror** (optional, default on): Harbor → ECR on agent label **`docker`** (`harbor-creds` + `aws-creds`)
+1. **Mirror** (optional, default on): Harbor → ECR on the **same Jenkins agent** as the job (`docker` + `aws` CLI). Optional param **`MIRROR_AGENT_LABEL`** if only some nodes have Docker.
 2. **Deploy**: bastion SSM → Helm (`spendsmart-gpg-key` + `aws-creds`)
 
 | Parameter | Meaning |
 |-----------|---------|
-| `MIRROR_TO_ECR` | `true` = run mirror stage (needs Docker agent + Harbor from Jenkins network) |
+| `MIRROR_TO_ECR` | `false` if you already pushed from PC; `true` needs Docker on Jenkins agent |
+| `MIRROR_AGENT_LABEL` | Optional node label (leave empty = default agent) |
 | `IMAGE_TAG` | ECR tag for deploy; empty + mirror on → **`BUILD_NUMBER`** |
 | `HARBOR_TAG` | Source tag on Harbor (default `latest`) |
 | `ECR_REPO_PREFIX` | `spendsmart/backend`, `spendsmart/frontend`, `spendsmart/engine` |
