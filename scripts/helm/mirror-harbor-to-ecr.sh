@@ -2,6 +2,13 @@
 # Pull SpendSmart images from Harbor (machine with Harbor access) and push to ECR.
 # Required: docker, aws CLI, HARBOR_USERNAME, HARBOR_PASSWORD (Harbor robot or user with pull on project coe).
 set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+if [[ -f "${ROOT}/deploy/harbor.env" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "${ROOT}/deploy/harbor.env"
+  set +a
+fi
 
 AWS_REGION="${AWS_REGION:-us-east-1}"
 HARBOR_SERVER="${HARBOR_SERVER:-harbor.ldc.opstree.dev}"
@@ -13,9 +20,13 @@ ECR_REPO_PREFIX="${ECR_REPO_PREFIX:-spendsmart}"
 : "${HARBOR_PASSWORD:?HARBOR_PASSWORD is required}"
 
 echo "Harbor login: ${HARBOR_SERVER} user=${HARBOR_USERNAME}"
-if ! printf '%s' "$HARBOR_PASSWORD" | docker login "$HARBOR_SERVER" -u "$HARBOR_USERNAME" --password-stdin; then
-  echo "Harbor docker login failed. Use the same username/password as: docker login ${HARBOR_SERVER}"
-  echo "Robot accounts are usually named like: robot\$coe+<robot-name>"
+if ! printf '%s' "$HARBOR_PASSWORD" | docker login "$HARBOR_SERVER" -u "$HARBOR_USERNAME" --password-stdin 2>&1; then
+  echo ""
+  echo "Harbor login failed. Fix:"
+  echo "  1) PC par: cp deploy/harbor.env.example deploy/harbor.env  (robot token, NOT LDAP password unless UI login works)"
+  echo "  2) bash scripts/helm/verify-harbor-login.sh"
+  echo "  3) Robot name copy from Harbor → Projects → coe → Robot Accounts (full name robot\$coe+...)"
+  echo "  4) Jenkins harbor-creds: Username with password; username mein \$ include karo"
   exit 1
 fi
 

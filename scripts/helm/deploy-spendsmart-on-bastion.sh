@@ -27,9 +27,12 @@ exec >>"$LOG" 2>&1
 
 if [[ -z "${ALB_DNS:-}" ]]; then
   ALB_DNS=$(aws cloudformation describe-stacks --stack-name "$ROOT_STACK" --region "$AWS_REGION" \
-    --query "Stacks[0].Outputs[?OutputKey=='AlbDnsName'].OutputValue | [0]" --output text)
+    --query "Stacks[0].Outputs[?OutputKey=='AlbDnsName'].OutputValue | [0]" --output text 2>/dev/null || true)
 fi
-[[ -n "$ALB_DNS" && "$ALB_DNS" != "None" ]] || { echo "ALB_DNS missing"; exit 1; }
+[[ -n "$ALB_DNS" && "$ALB_DNS" != "None" ]] || {
+  echo "ALB_DNS missing — set in deploy-spendsmart.env (run-on-bastion-via-ssm fetches from CFN using Jenkins creds)"
+  exit 1
+}
 
 echo "=== deploy-spendsmart-on-bastion $(date -u +%Y-%m-%dT%H:%M:%SZ) alb=$ALB_DNS tag=$IMAGE_TAG ==="
 

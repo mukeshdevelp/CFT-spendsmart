@@ -17,15 +17,23 @@ Infra (`Jenkinsfile` / `scripts/cfn-deploy.sh`) must be **CREATE_COMPLETE** with
 
 Credentials: **`harbor-creds`** (mirror only), **`spendsmart-gpg-key`**, **`aws-creds`**.
 
-### Harbor `unauthorized` on mirror
+### Harbor login nahi ho raha
 
-1. Jenkins **`harbor-creds`** = **Username with password** (not secret text). Username/password must work on the **Jenkins agent**:
+**Recommended:** mirror **apne PC** par (office/VPN jahan Harbor open ho), Jenkins par **`MIRROR_TO_ECR=false`**.
+
+1. Harbor UI → **Projects → coe → Robot Accounts** → New robot → **Pull** permission → copy **username** + **token** (token = password; LDAP password kaam nahi karega agar robot use kar rahe ho).
+
+2. Local test:
    ```bash
-   docker login harbor.ldc.opstree.dev -u '<same-as-jenkins>' -p '<token>'
-   docker pull harbor.ldc.opstree.dev/coe/uniteconpro-backend-prod:latest
+   cp deploy/harbor.env.example deploy/harbor.env
+   # edit HARBOR_USERNAME=robot$coe+...  HARBOR_PASSWORD=<token>
+   bash scripts/helm/verify-harbor-login.sh
+   bash scripts/helm/mirror-harbor-to-ecr.sh
    ```
-2. Harbor **robot** users look like `robot$coe+<name>` and need **pull** on project **`coe`**.
-3. Jenkins agent must reach Harbor (VPN/office network). If not, mirror on PC and run the job with **`MIRROR_TO_ECR=false`** and matching **`IMAGE_TAG`**.
+
+3. Jenkins **`harbor-creds`**: type **Username with password**; username exactly `robot$coe+...` (dollar sign zaroori).
+
+4. Jenkins agent par Harbor **network** chahiye (192.168.x). Agent par nahi chalta to **`MIRROR_TO_ECR=false`** + same **`IMAGE_TAG`** as PC push.
 
 Bastion log: `sudo tail -f /var/log/spendsmart-helm-deploy.log`
 

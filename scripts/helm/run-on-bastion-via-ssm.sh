@@ -18,6 +18,13 @@ REMOTE_NAME="$(basename "$SCRIPT_LOCAL")"
 
 [[ -n "${GPG_KEY:-}" ]] || { echo "GPG_KEY must be set in caller environment (Jenkins spendsmart-gpg-key)"; exit 1; }
 
+if [[ -z "${ALB_DNS:-}" ]]; then
+  ALB_DNS=$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
+    --query "Stacks[0].Outputs[?OutputKey=='AlbDnsName'].OutputValue | [0]" --output text)
+fi
+[[ -n "$ALB_DNS" && "$ALB_DNS" != "None" ]] || { echo "AlbDnsName not found for stack $STACK"; exit 1; }
+echo "ALB_DNS=$ALB_DNS (passed to bastion via deploy-spendsmart.env)"
+
 ENV_FILE="$(mktemp)"
 trap 'rm -f "$ENV_FILE"' EXIT
 {
