@@ -7,7 +7,10 @@
 set -euo pipefail
 
 LOG=/var/log/spendsmart-helm-deploy.log
-exec >>"$LOG" 2>&1
+if [[ -z "${GPG_KEY:-}" ]]; then
+  echo "GPG_KEY is not set (check Jenkins spendsmart-gpg-key / deploy-spendsmart.env)" >&2
+  exit 1
+fi
 
 AWS_REGION="${AWS_REGION:-us-east-1}"
 EKS_CLUSTER="${EKS_CLUSTER_NAME:-spendsmart}"
@@ -20,7 +23,7 @@ ROOT_STACK="${CFN_STACK_NAME:-spendsmart-dev}"
 ECR_REPO_PREFIX="${ECR_REPO_PREFIX:-spendsmart}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 
-: "${GPG_KEY:?}"
+exec >>"$LOG" 2>&1
 
 if [[ -z "${ALB_DNS:-}" ]]; then
   ALB_DNS=$(aws cloudformation describe-stacks --stack-name "$ROOT_STACK" --region "$AWS_REGION" \
@@ -37,9 +40,12 @@ FRONTEND_REPO="${ECR_REGISTRY}/${ECR_REPO_PREFIX}/frontend"
 ENGINE_REPO="${ECR_REGISTRY}/${ECR_REPO_PREFIX}/engine"
 
 for comp in backend frontend engine; do
-  aws ecr describe-images --repository-name "${ECR_REPO_PREFIX}/${comp}" --region "$AWS_REGION" \
-    --image-ids "imageTag=${IMAGE_TAG}" >/dev/null \
-    || { echo "ECR image missing: ${ECR_REGISTRY}/${ECR_REPO_PREFIX}/${comp}:${IMAGE_TAG} — run mirror-harbor-to-ecr.sh first"; exit 1; }
+  if ! aws ecr describe-images --repository-name "${ECR_REPO_PREFIX}/${comp}" --region "$AWS_REGION" \
+    --image-ids "imageTag=${IMAGE_TAG}" >/dev/null 2>&1; then
+    echo "ECR image missing: ${ECR_REGISTRY}/${ECR_REPO_PREFIX}/${comp}:${IMAGE_TAG}"
+    echo "Run mirror with same IMAGE_TAG (Jenkins RESOLVED_IMAGE_TAG=${IMAGE_TAG}) or set IMAGE_TAG=latest if you pushed latest only"
+    exit 1
+  fi
 done
 echo "ECR images OK under ${ECR_REGISTRY}/${ECR_REPO_PREFIX}/*:${IMAGE_TAG}"
 

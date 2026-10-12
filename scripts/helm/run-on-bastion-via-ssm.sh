@@ -16,6 +16,8 @@ fi
 SCRIPT_LOCAL="${1:-${ROOT}/scripts/helm/deploy-spendsmart-on-bastion.sh}"
 REMOTE_NAME="$(basename "$SCRIPT_LOCAL")"
 
+[[ -n "${GPG_KEY:-}" ]] || { echo "GPG_KEY must be set in caller environment (Jenkins spendsmart-gpg-key)"; exit 1; }
+
 ENV_FILE="$(mktemp)"
 trap 'rm -f "$ENV_FILE"' EXIT
 {
@@ -39,7 +41,7 @@ CMD_ID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --region "$REGION" \
     \"aws s3 cp s3://${BUCKET}/bastion-assets/${REMOTE_NAME} /tmp/${REMOTE_NAME} --region ${REGION}\",
     \"aws s3 cp s3://${BUCKET}/bastion-assets/deploy-spendsmart.env /tmp/deploy-spendsmart.env --region ${REGION}\",
     \"chmod +x /tmp/${REMOTE_NAME}\",
-    \"set -a && source /tmp/deploy-spendsmart.env && set +a && sudo -E bash /tmp/${REMOTE_NAME}\"
+    \"sudo bash -c 'set -a && source /tmp/deploy-spendsmart.env && set +a && bash /tmp/${REMOTE_NAME}' || { echo '--- tail /var/log/spendsmart-helm-deploy.log ---'; sudo tail -120 /var/log/spendsmart-helm-deploy.log 2>/dev/null || true; exit 1; }\"
   ]" \
   --query 'Command.CommandId' --output text)
 
