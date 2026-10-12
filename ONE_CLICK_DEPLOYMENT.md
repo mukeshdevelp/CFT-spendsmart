@@ -31,6 +31,16 @@ This guide deploys the **infra** CloudFormation root stack in `main.yml` (throug
 
 **Cost and bucket deletion:** The NAT gateway, EKS control plane, EC2 nodes, bastion, ALB, and data transfer incur charges. CloudFormation deletes the S3 bucket on rollback or stack deletion. S3 requires a bucket to be empty, including all object versions, before it can be deleted; a non-empty bucket can make stack cleanup fail.
 
+### Eks nested stack: “Validation failure detected” / CREATE_FAILED
+
+1. Open **CloudFormation → Stacks → `spendsmart-dev-Eks-…` → Events** and read the **first failed resource** (often `EksClusterRole` or `EksCluster`).
+2. **Orphan IAM roles** after rollback block recreate (`Role with name … already exists`):
+   ```bash
+   NAME_PREFIX=spendsmart-dev bash scripts/cfn-cleanup-orphan-eks-roles.sh
+   ```
+3. Redeploy from a **packaged** template (`aws cloudformation package` then `cfn-deploy.sh`), not raw `main.yml` with local `TemplateURL` paths.
+4. If the event cites **Kubernetes version**, set a supported version in `modules/eks/template.yaml` (`EksClusterVersion`, e.g. `1.35`).
+
 ### S3 nested stack fails with “Validation failure detected”
 
 Usually **`S3BucketName` (`athena-results-spendsmart-dev`) already exists** outside the stack, or **`spendsmart-cur`** CUR report already exists. Empty and delete the orphan bucket, or remove the old CUR definition in Billing → Cost & Usage Reports, then re-deploy. The stack creates the bucket with `DeletionPolicy: Delete` so rollback removes it when the bucket is empty (including all object versions).

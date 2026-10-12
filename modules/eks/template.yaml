@@ -682,6 +682,9 @@ Resources:
 
   AlbControllerPodIdentityAssociation:
     Type: AWS::EKS::PodIdentityAssociation
+    DependsOn:
+      - EksCluster
+      - EksAddonPodIdentityAgent
     Properties:
       ClusterName: !Ref EksCluster
       Namespace: !Ref AlbControllerNamespace

@@ -152,6 +152,7 @@ Resources:
         Environment: dev
         EksClusterName: spendsmart
         VpcId: !GetAtt Network.Outputs.VpcId
+        VpcCidr: !GetAtt Network.Outputs.VpcCidr
         PrivateSubnet1Id: !GetAtt Network.Outputs.PrivateSubnet1Id
         PrivateSubnet2Id: !GetAtt Network.Outputs.PrivateSubnet2Id
         BastionSecurityGroupId: ''
