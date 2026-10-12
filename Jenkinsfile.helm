@@ -8,14 +8,18 @@ pipeline {
   }
 
   parameters {
-    choice(name: 'AWS_REGION', choices: ['us-east-1', 'ap-south-1'], description: 'Stack region')
-    string(name: 'CFN_STACK_NAME', defaultValue: 'spendsmart-dev', description: 'Infra stack name (must be CREATE_COMPLETE)')
-    string(name: 'CFN_TEMPLATE_BUCKET', defaultValue: 'spendsmart-cfn-packages', description: 'S3 bucket for bastion-assets')
+    choice(name: 'AWS_REGION', choices: ['us-east-1', 'ap-south-1'], description: 'Stack / ECR region')
+    string(name: 'CFN_STACK_NAME', defaultValue: 'spendsmart-dev', description: 'Infra stack (CREATE_COMPLETE)')
+    string(name: 'CFN_TEMPLATE_BUCKET', defaultValue: 'spendsmart-cfn-packages', description: 'S3 bastion-assets bucket')
     string(name: 'NAME_PREFIX', defaultValue: 'spendsmart-dev', description: 'NamePrefix / SM path prefix')
     string(name: 'EKS_CLUSTER_NAME', defaultValue: 'spendsmart', description: 'EKS cluster name')
-    string(name: 'CREDENTIAL_HARBOR', defaultValue: 'harbor-creds', description: 'Jenkins user/pass for harbor.ldc.opstree.dev')
-    string(name: 'CREDENTIAL_GPG_KEY', defaultValue: 'spendsmart-gpg-key', description: 'Secret text: backend GPG_KEY (same as local encryption-key)')
-    string(name: 'BASTION_INSTANCE_ID', defaultValue: '', description: 'Optional; default from stack output BastionInstanceId')
+    booleanParam(name: 'MIRROR_TO_ECR', defaultValue: true, description: 'Pull Harbor on docker agent and push to ECR')
+    string(name: 'ECR_REPO_PREFIX', defaultValue: 'spendsmart', description: 'ECR repos: {prefix}/backend|frontend|engine')
+    string(name: 'HARBOR_TAG', defaultValue: 'latest', description: 'Tag to pull from Harbor when mirroring')
+    string(name: 'IMAGE_TAG', defaultValue: '', description: 'ECR deploy tag (empty = BUILD_NUMBER when mirroring, else latest)')
+    string(name: 'CREDENTIAL_HARBOR', defaultValue: 'harbor-creds', description: 'Harbor login (mirror stage only)')
+    string(name: 'CREDENTIAL_GPG_KEY', defaultValue: 'spendsmart-gpg-key', description: 'Backend GPG_KEY secret text')
+    string(name: 'BASTION_INSTANCE_ID', defaultValue: '', description: 'Optional; default from stack BastionInstanceId')
   }
 
   environment {
@@ -25,12 +29,54 @@ pipeline {
     CFN_TEMPLATE_BUCKET = "${params.CFN_TEMPLATE_BUCKET}"
     NAME_PREFIX = "${params.NAME_PREFIX}"
     EKS_CLUSTER_NAME = "${params.EKS_CLUSTER_NAME}"
+    ECR_REPO_PREFIX = "${params.ECR_REPO_PREFIX}"
+    HARBOR_TAG = "${params.HARBOR_TAG}"
     BASTION_INSTANCE_ID = "${params.BASTION_INSTANCE_ID}"
   }
 
   stages {
     stage('Checkout') {
       steps { checkout scm }
+    }
+
+    stage('Resolve image tag') {
+      steps {
+        script {
+          def p = params.IMAGE_TAG?.trim()
+          if (p) {
+            env.RESOLVED_IMAGE_TAG = p
+          } else if (params.MIRROR_TO_ECR) {
+            env.RESOLVED_IMAGE_TAG = "${env.BUILD_NUMBER}"
+          } else {
+            env.RESOLVED_IMAGE_TAG = 'latest'
+          }
+          echo "Deploy ECR tag: ${env.RESOLVED_IMAGE_TAG}"
+        }
+      }
+    }
+
+    stage('Mirror Harbor to ECR') {
+      when { expression { return params.MIRROR_TO_ECR } }
+      agent { label 'docker' }
+      steps {
+        checkout scm
+        script {
+          def harborCred = params.CREDENTIAL_HARBOR?.trim() ?: 'harbor-creds'
+          withCredentials([
+            usernamePassword(credentialsId: harborCred, usernameVariable: 'HARBOR_USERNAME', passwordVariable: 'HARBOR_PASSWORD'),
+          ]) {
+            withAwsCredentials {
+              sh '''
+              set -eu
+              export IMAGE_TAG="${RESOLVED_IMAGE_TAG}"
+              export ECR_REPO_PREFIX="${ECR_REPO_PREFIX}"
+              export HARBOR_TAG="${HARBOR_TAG}"
+              bash scripts/helm/mirror-harbor-to-ecr.sh
+              '''
+            }
+          }
+        }
+      }
     }
 
     stage('Preflight infra stack') {
@@ -66,20 +112,19 @@ pipeline {
     stage('Deploy SpendSmart via bastion SSM') {
       steps {
         script {
-          def harborCred = params.CREDENTIAL_HARBOR?.trim() ?: 'harbor-creds'
           def gpgCred = params.CREDENTIAL_GPG_KEY?.trim() ?: 'spendsmart-gpg-key'
           withCredentials([
-            usernamePassword(credentialsId: harborCred, usernameVariable: 'HARBOR_USERNAME', passwordVariable: 'HARBOR_PASSWORD'),
             string(credentialsId: gpgCred, variable: 'GPG_KEY'),
           ]) {
             withAwsCredentials {
               sh '''
               set -eu
+              export IMAGE_TAG="${RESOLVED_IMAGE_TAG}"
               export CFN_STACK_NAME="${CFN_STACK_NAME}"
               export CFN_TEMPLATE_BUCKET="${CFN_TEMPLATE_BUCKET}"
               export NAME_PREFIX="${NAME_PREFIX}"
               export EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME}"
-              export HARBOR_SERVER="${HARBOR_SERVER:-harbor.ldc.opstree.dev}"
+              export ECR_REPO_PREFIX="${ECR_REPO_PREFIX}"
               if [ -n "${BASTION_INSTANCE_ID}" ]; then export BASTION_INSTANCE_ID="${BASTION_INSTANCE_ID}"; fi
               bash scripts/helm/run-on-bastion-via-ssm.sh scripts/helm/deploy-spendsmart-on-bastion.sh
               '''
@@ -107,7 +152,7 @@ pipeline {
 
   post {
     failure {
-      sh 'echo "Helm deploy failed — on bastion: sudo tail -100 /var/log/spendsmart-helm-deploy.log"'
+      sh 'echo "Helm deploy failed — bastion: sudo tail -100 /var/log/spendsmart-helm-deploy.log"'
     }
   }
 }

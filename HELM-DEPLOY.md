@@ -1,41 +1,51 @@
 # SpendSmart Helm deploy (after infra)
 
-Infra stack (`Jenkinsfile` / `scripts/cfn-deploy.sh`) must be **CREATE_COMPLETE** with:
+Infra (`Jenkinsfile` / `scripts/cfn-deploy.sh`) must be **CREATE_COMPLETE** with `databases` pods Ready and ALB :8080/:8081/:8083.
 
-- `databases` namespace: Postgres + ClickHouse Running (bastion bootstrap)
-- Node labels: `spendsmart.io/workload=backend|frontend|database`
-- ALB listeners 8080 / 8081 / 8083 → NodePorts 30080 / 30081 / 30083
+## One Jenkins job: `Jenkinsfile.helm`
 
-## Jenkins one-click
+1. **Mirror** (optional, default on): Harbor → ECR on agent label **`docker`** (`harbor-creds` + `aws-creds`)
+2. **Deploy**: bastion SSM → Helm (`spendsmart-gpg-key` + `aws-creds`)
 
-1. Create credentials:
-   - **`harbor-creds`** — Harbor robot (same as `docker login harbor.ldc.opstree.dev`)
-   - **`spendsmart-gpg-key`** — secret text = backend `GPG_KEY` (local `encryption-key` secret)
-   - **`aws-creds`** — deploy account
-2. Run pipeline **`Jenkinsfile.helm`** with `CFN_STACK_NAME=spendsmart-dev`.
-3. Job uploads `deploy-spendsmart-on-bastion.sh` to S3 and runs it on the bastion via SSM.
+| Parameter | Meaning |
+|-----------|---------|
+| `MIRROR_TO_ECR` | `true` = run mirror stage (needs Docker agent + Harbor from Jenkins network) |
+| `IMAGE_TAG` | ECR tag for deploy; empty + mirror on → **`BUILD_NUMBER`** |
+| `HARBOR_TAG` | Source tag on Harbor (default `latest`) |
+| `ECR_REPO_PREFIX` | `spendsmart/backend`, `spendsmart/frontend`, `spendsmart/engine` |
 
-Logs on bastion: `sudo tail -f /var/log/spendsmart-helm-deploy.log`
+Credentials: **`harbor-creds`** (mirror only), **`spendsmart-gpg-key`**, **`aws-creds`**.
 
-## Local / CLI
+Bastion log: `sudo tail -f /var/log/spendsmart-helm-deploy.log`
+
+## Manual: PC mirror then deploy
 
 ```bash
-export AWS_REGION=us-east-1 CFN_STACK_NAME=spendsmart-dev CFN_TEMPLATE_BUCKET=spendsmart-cfn-packages
-export HARBOR_USERNAME=... HARBOR_PASSWORD=... GPG_KEY=...
+export AWS_REGION=us-east-1
+export HARBOR_USERNAME=... HARBOR_PASSWORD=...
+export IMAGE_TAG=latest
+bash scripts/helm/mirror-harbor-to-ecr.sh
 
+export CFN_STACK_NAME=spendsmart-dev CFN_TEMPLATE_BUCKET=spendsmart-cfn-packages
+export IMAGE_TAG=latest GPG_KEY=...
 bash scripts/sync-bastion-assets.sh "$CFN_TEMPLATE_BUCKET" "$AWS_REGION"
-bash scripts/helm/run-on-bastion-via-ssm.sh scripts/helm/deploy-spendsmart-on-bastion.sh
+bash scripts/helm/run-on-bastion-via-ssm.sh
 ```
+
+Harbor sources (mirror script):
+
+| ECR | Harbor |
+|-----|--------|
+| `spendsmart/backend` | `harbor.ldc.opstree.dev/coe/uniteconpro-backend-prod` |
+| `spendsmart/frontend` | `harbor.ldc.opstree.dev/coe/uniteconpro-frontend-prod` |
+| `spendsmart/engine` | `harbor.ldc.opstree.dev/coe/uniteconpro-engine-dev` |
 
 ## URLs
 
 ```bash
 eval "$(bash scripts/cfn-alb-urls.sh)"
-# Frontend :8080  Backend :8081  Keycloak :8083
 ```
 
 ## Chart
 
-- Repo: `https://github.com/OT-CONTAINER-KIT/helm-charts.git`
-- Branch: `feature/spendsmart-helm-chart`
-- Release: `spendsmart` in namespace **`spendsmart`**
+`OT-CONTAINER-KIT/helm-charts` branch `feature/spendsmart-helm-chart`, release `spendsmart` in namespace **`spendsmart`**.

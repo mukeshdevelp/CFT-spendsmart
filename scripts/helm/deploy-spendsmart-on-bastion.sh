@@ -1,8 +1,8 @@
 #!/bin/bash
-# SpendSmart Helm + Keycloak on EKS (run on bastion as root after infra + DB bootstrap).
-# Required env: HARBOR_USERNAME, HARBOR_PASSWORD, GPG_KEY
-# Optional: AWS_REGION, EKS_CLUSTER_NAME, NAME_PREFIX, NAMESPACE, KEYCLOAK_ADMIN_PASSWORD,
-#           HARBOR_SERVER, CFN_STACK_NAME, ALB_DNS (auto from stack if unset)
+# SpendSmart Helm + Keycloak on EKS (bastion, after infra + DB bootstrap).
+# Required: GPG_KEY. Images from account ECR (mirror via mirror-harbor-to-ecr.sh first).
+# Optional: AWS_REGION, EKS_CLUSTER_NAME, NAME_PREFIX, NAMESPACE, ECR_REPO_PREFIX, IMAGE_TAG,
+#           ECR_REGISTRY, KEYCLOAK_ADMIN_PASSWORD, CFN_STACK_NAME, ALB_DNS
 
 set -euo pipefail
 
@@ -16,11 +16,10 @@ NAMESPACE="${NAMESPACE:-spendsmart}"
 CHART_REPO="${CHART_REPO:-https://github.com/OT-CONTAINER-KIT/helm-charts.git}"
 CHART_BRANCH="${CHART_BRANCH:-feature/spendsmart-helm-chart}"
 KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-spendsmart-keycloak-admin}"
-HARBOR_SERVER="${HARBOR_SERVER:-harbor.ldc.opstree.dev}"
 ROOT_STACK="${CFN_STACK_NAME:-spendsmart-dev}"
+ECR_REPO_PREFIX="${ECR_REPO_PREFIX:-spendsmart}"
+IMAGE_TAG="${IMAGE_TAG:-latest}"
 
-: "${HARBOR_USERNAME:?}"
-: "${HARBOR_PASSWORD:?}"
 : "${GPG_KEY:?}"
 
 if [[ -z "${ALB_DNS:-}" ]]; then
@@ -29,7 +28,20 @@ if [[ -z "${ALB_DNS:-}" ]]; then
 fi
 [[ -n "$ALB_DNS" && "$ALB_DNS" != "None" ]] || { echo "ALB_DNS missing"; exit 1; }
 
-echo "=== deploy-spendsmart-on-bastion $(date -u +%Y-%m-%dT%H:%M:%SZ) alb=$ALB_DNS ==="
+echo "=== deploy-spendsmart-on-bastion $(date -u +%Y-%m-%dT%H:%M:%SZ) alb=$ALB_DNS tag=$IMAGE_TAG ==="
+
+ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+ECR_REGISTRY="${ECR_REGISTRY:-${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com}"
+BACKEND_REPO="${ECR_REGISTRY}/${ECR_REPO_PREFIX}/backend"
+FRONTEND_REPO="${ECR_REGISTRY}/${ECR_REPO_PREFIX}/frontend"
+ENGINE_REPO="${ECR_REGISTRY}/${ECR_REPO_PREFIX}/engine"
+
+for comp in backend frontend engine; do
+  aws ecr describe-images --repository-name "${ECR_REPO_PREFIX}/${comp}" --region "$AWS_REGION" \
+    --image-ids "imageTag=${IMAGE_TAG}" >/dev/null \
+    || { echo "ECR image missing: ${ECR_REGISTRY}/${ECR_REPO_PREFIX}/${comp}:${IMAGE_TAG} — run mirror-harbor-to-ecr.sh first"; exit 1; }
+done
+echo "ECR images OK under ${ECR_REGISTRY}/${ECR_REPO_PREFIX}/*:${IMAGE_TAG}"
 
 dnf install -y git tar gzip python3
 command -v curl >/dev/null || dnf install -y curl-minimal
@@ -66,12 +78,6 @@ spec:
   externalName: clickhouse.databases.svc.cluster.local
 CHSVC
 
-kubectl -n "$NAMESPACE" create secret docker-registry harbor-ldc-coe-regcred \
-  --docker-server="$HARBOR_SERVER" \
-  --docker-username="$HARBOR_USERNAME" \
-  --docker-password="$HARBOR_PASSWORD" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
 kubectl -n "$NAMESPACE" create secret generic encryption-key \
   --from-literal=GPG_KEY="$GPG_KEY" --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n "$NAMESPACE" create secret generic clickhouse \
@@ -94,14 +100,13 @@ kubectl -n "$NAMESPACE" create secret generic clickhouse-db \
 
 API_URL="http://${ALB_DNS}:8081"
 KC_URL="http://${ALB_DNS}:8083"
+
 cat >/tmp/client-a-values.yaml <<EOF
-imagePullSecrets:
-  - name: harbor-ldc-coe-regcred
 backend:
   enabled: true
   image:
-    repository: harbor.ldc.opstree.dev/coe/uniteconpro-backend-prod
-    tag: latest
+    repository: ${BACKEND_REPO}
+    tag: ${IMAGE_TAG}
   nodeSelector:
     spendsmart.io/workload: backend
   service:
@@ -110,8 +115,8 @@ backend:
 frontend:
   enabled: true
   image:
-    repository: harbor.ldc.opstree.dev/coe/uniteconpro-frontend-prod
-    tag: latest
+    repository: ${FRONTEND_REPO}
+    tag: ${IMAGE_TAG}
   nodeSelector:
     spendsmart.io/workload: frontend
   service:
@@ -134,8 +139,8 @@ cloudsentry:
 engine:
   enabled: true
   image:
-    repository: harbor.ldc.opstree.dev/coe/uniteconpro-engine-dev
-    tag: latest
+    repository: ${ENGINE_REPO}
+    tag: ${IMAGE_TAG}
   schedule: "5 11,23 * * *"
   nodeSelector:
     spendsmart.io/workload: backend

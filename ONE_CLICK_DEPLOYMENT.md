@@ -106,12 +106,13 @@ aws cloudformation describe-stack-events \
 ## Deploy SpendSmart (Helm — after infra)
 
 1. Confirm `kubectl get po -n databases` on bastion.
-2. Run **`Jenkinsfile.helm`** (credentials `harbor-creds`, `spendsmart-gpg-key`) or see [HELM-DEPLOY.md](HELM-DEPLOY.md).
+2. Run **`Jenkinsfile.helm`** (see [HELM-DEPLOY.md](HELM-DEPLOY.md): mirror to ECR + deploy).
 
 ```sh
 bash scripts/cfn-deploy.sh   # infra only
 # then helm job or:
-export HARBOR_USERNAME=... HARBOR_PASSWORD=... GPG_KEY=...
+bash scripts/helm/mirror-harbor-to-ecr.sh   # on PC with Harbor access
+export IMAGE_TAG=latest GPG_KEY=...
 bash scripts/helm/run-on-bastion-via-ssm.sh
 ```
 

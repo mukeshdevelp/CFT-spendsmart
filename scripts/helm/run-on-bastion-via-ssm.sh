@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run deploy script on bastion via SSM. Exports HARBOR_*, GPG_KEY, etc. must be set in caller env.
+# Run deploy script on bastion via SSM. Set GPG_KEY, IMAGE_TAG, etc. in caller env.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 REGION="${AWS_REGION:-us-east-1}"
@@ -22,8 +22,8 @@ trap 'rm -f "$ENV_FILE"' EXIT
   echo "export AWS_REGION=$(printf '%q' "$REGION")"
   echo "export CFN_STACK_NAME=$(printf '%q' "$STACK")"
   echo "export CFN_TEMPLATE_BUCKET=$(printf '%q' "$BUCKET")"
-  for v in EKS_CLUSTER_NAME NAME_PREFIX NAMESPACE ALB_DNS HARBOR_USERNAME HARBOR_PASSWORD \
-    HARBOR_SERVER GPG_KEY KEYCLOAK_ADMIN_PASSWORD; do
+  for v in EKS_CLUSTER_NAME NAME_PREFIX NAMESPACE ECR_REPO_PREFIX IMAGE_TAG ECR_REGISTRY \
+    GPG_KEY KEYCLOAK_ADMIN_PASSWORD ALB_DNS; do
     if [[ -n "${!v:-}" ]]; then
       echo "export ${v}=$(printf '%q' "${!v}")"
     fi
