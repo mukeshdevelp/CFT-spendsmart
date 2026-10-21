@@ -76,6 +76,15 @@ Parameters:
   AthenaLifecycleRuleId:
     Type: String
     Default: expire-athena-results
+
+  Parameters:
+  EnableCostAndUsageReport:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Enable CUR report creation in a supported AWS Region
 Conditions:
   AthenaLifecycleActive: !And
     - !Condition AthenaLifecycleRequested
@@ -89,6 +98,9 @@ Conditions:
   S3BucketKeyEnabledCondition: !Equals [!Ref S3BucketKeyEnabled, 'true']
   S3UsesKms: !Equals [!Ref S3EncryptionAlgorithm, aws:kms]
   S3VersioningEnabledCondition: !Equals [!Ref S3VersioningEnabled, 'true']
+  CreateCostAndUsageReport: !Equals
+    - !Ref EnableCostAndUsageReport
+    - "true"
 Resources:
   DataBucket:
     Type: AWS::S3::Bucket
@@ -160,6 +172,7 @@ Resources:
 
   CostAndUsageReport:
     Type: AWS::CUR::ReportDefinition
+    Condition: CreateCostAndUsageReport
     DependsOn: CurBucketPolicy
     Properties:
       ReportName: !Ref CurReportName
