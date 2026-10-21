@@ -8,7 +8,7 @@ pipeline {
   }
 
   parameters {
-    choice(name: 'AWS_REGION', choices: ['us-east-1', 'ap-south-1'], description: 'Stack / ECR region')
+    choice(name: 'AWS_REGION', choices: ['us-east-1', 'ap-south-1', 'ca-central-1'], description: 'Stack / ECR region')
     string(name: 'CFN_STACK_NAME', defaultValue: 'spendsmart-dev', description: 'Infra stack (CREATE_COMPLETE)')
     string(name: 'CFN_TEMPLATE_BUCKET', defaultValue: 'spendsmart-cfn-packages', description: 'S3 bastion-assets bucket')
     string(name: 'NAME_PREFIX', defaultValue: 'spendsmart-dev', description: 'NamePrefix / SM path prefix')

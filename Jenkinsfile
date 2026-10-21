@@ -10,7 +10,7 @@ pipeline {
   parameters {
     choice(
       name: 'AWS_REGION',
-      choices: ['us-east-1', 'ap-south-1'],
+      choices: ['us-east-1', 'ap-south-1', 'ca-central-1'],
       description: 'Stack region. Use us-east-1 for CUR and this template set.'
     )
     string(
