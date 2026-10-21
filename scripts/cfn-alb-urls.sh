@@ -3,7 +3,7 @@
 # Source this file or run: eval "$(bash scripts/cfn-alb-urls.sh)"
 set -euo pipefail
 STACK_NAME="${CFN_STACK_NAME:-spendsmart-dev}"
-REGION="${AWS_REGION:-us-east-1}"
+REGION="${AWS_REGION:-ca-central-1}"
 
 FRONTEND_PORT="${ALB_FRONTEND_PORT:-8080}"
 BACKEND_PORT="${ALB_BACKEND_PORT:-8081}"

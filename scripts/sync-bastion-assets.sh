@@ -2,7 +2,7 @@
 # Upload bastion bootstrap scripts and DB manifests to the CFN template bucket.
 set -euo pipefail
 BUCKET="${1:?usage: sync-bastion-assets.sh <cfn-template-bucket> [region]}"
-REGION="${2:-us-east-1}"
+REGION="${2:-ca-central-1}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STAGING="$(mktemp -d)"
 trap 'rm -rf "$STAGING"' EXIT

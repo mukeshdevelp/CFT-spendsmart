@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Re-run cluster bootstrap on an existing bastion (after fixing SG or uploading assets).
 set -euo pipefail
-export EKS_REGION="${EKS_REGION:-us-east-1}"
+export EKS_REGION="${EKS_REGION:-ca-central-1}"
 export EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-spendsmart}"
 export POSTGRES_SECRET_NAME="${POSTGRES_SECRET_NAME:-spendsmart-dev/postgres}"
 export CLICKHOUSE_SECRET_NAME="${CLICKHOUSE_SECRET_NAME:-spendsmart-dev/clickhouse}"

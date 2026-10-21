@@ -1,5 +1,7 @@
 # SpendSmart CloudFormation (infra)
 
+This monorepo is unchanged; split copies also live in [spendsmart-infra-only-aws](https://github.com/mukeshdevelp/spendsmart-infra-only-aws) and [spendsmart-helm-deployment-repo](https://github.com/mukeshdevelp/spendsmart-helm-deployment-repo).
+
 **Pipeline 1 — Infra:** VPC, EKS, Secrets Manager (Postgres/ClickHouse), in-cluster DBs on bastion bootstrap, ALB (:8080/:8081/:8083), S3/CUR/Glue/Athena, IAM.
 
 **Pipeline 2 — App:** [Jenkinsfile.helm](Jenkinsfile.helm) — Harbor → ECR (optional) + Helm on bastion via SSM. See [HELM-DEPLOY.md](HELM-DEPLOY.md).

@@ -70,11 +70,11 @@ Parameters:
   # EKS control plane cannot use us-east-1e (use two of 1a/1b/1c/1d/1f).
   PrivateSubnetAz1:
     Type: String
-    Default: us-east-1a
+    Default: ca-central-1a
 
   PrivateSubnetAz2:
     Type: String
-    Default: us-east-1b
+    Default: ca-central-1b
 
 Rules:
   ExistingEksInputsRequired:
