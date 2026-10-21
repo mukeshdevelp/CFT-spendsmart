@@ -214,6 +214,7 @@ Resources:
         ProjectName: spendsmart
         Environment: dev
         S3BucketName: !Ref S3BucketName
+        EnableCostAndUsageReport: "false"
 
   Glue:
     Type: AWS::CloudFormation::Stack

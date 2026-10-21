@@ -77,7 +77,7 @@ Parameters:
     Type: String
     Default: expire-athena-results
 
-  Parameters:
+  
   EnableCostAndUsageReport:
     Type: String
     Default: "false"
