@@ -1,0 +1,38 @@
+# SpendSmart on one GCP VM (k3s)
+
+Single VM runs **k3s**, **Postgres + ClickHouse** in Kubernetes, and **SpendSmart** via the vendored Helm chart (Harbor images).
+
+## Prerequisites (GCP)
+
+- Ubuntu 22.04+ VM (suggested: **e2-standard-8**, 50GB+ disk)
+- Firewall: allow **TCP 30080–30083** (and 22 for SSH)
+- VM can reach **Harbor** (VPN/office if required)
+
+## One-click
+
+On the VM, clone this branch and configure secrets:
+
+```bash
+git clone <repo> && cd CFT
+cp deploy/harbor.env.example deploy/harbor.env   # robot token
+cp deploy/gpg.env.example deploy/gpg.env         # GPG_KEY=...
+cp deploy/vm.env.example deploy/vm.env           # optional PUBLIC_HOST
+
+bash scripts/vm/verify-harbor-login.sh           # optional sanity check
+bash scripts/vm/one-click-deploy.sh
+```
+
+Open: `http://<PUBLIC_HOST>:30080`
+
+## Script layout
+
+| Script | Role |
+|--------|------|
+| `scripts/vm/one-click-deploy.sh` | Full install |
+| `scripts/vm/install-k3s.sh` | k3s if missing |
+| `scripts/vm/bootstrap-databases.sh` | Postgres + ClickHouse in `databases` |
+| `scripts/vm/deploy-spendsmart.sh` | Secrets + Helm |
+| `scripts/vm/create-harbor-pull-secret.sh` | `harbor-regcred` |
+| `scripts/load-deploy-env.sh` | Sources `deploy/*.env` |
+
+Chart: `charts/spendsmart` with **`-f values-vm.yaml`**.
