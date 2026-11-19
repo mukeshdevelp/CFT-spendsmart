@@ -1,4 +1,4 @@
-# In-cluster Postgres + ClickHouse for single-node GCP VM (k3s).
+# In-cluster Postgres + ClickHouse for a single-node Kubernetes cluster.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:

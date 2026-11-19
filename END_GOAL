@@ -1,38 +1,41 @@
-# SpendSmart on one GCP VM (k3s)
+# SpendSmart on GCP VM (existing Kubernetes)
 
-Single VM runs **k3s**, **Postgres + ClickHouse** in Kubernetes, and **SpendSmart** via the vendored Helm chart (Harbor images).
+The server already runs Kubernetes. **Postgres + ClickHouse** live in the `databases` namespace; the app is installed with the **Helm chart** only.
 
-## Prerequisites (GCP)
+## Prerequisites
 
-- Ubuntu 22.04+ VM (suggested: **e2-standard-8**, 50GB+ disk)
-- Firewall: allow **TCP 30080–30083** (and 22 for SSH)
-- VM can reach **Harbor** (VPN/office if required)
+- Working `kubectl` / `KUBECONFIG`
+- Firewall: **TCP 30080–30083** (NodePorts)
+- Harbor access from nodes (for private images)
 
-## One-click
-
-On the VM, clone this branch and configure secrets:
+## First-time: in-cluster databases (once)
 
 ```bash
-git clone <repo> && cd CFT
-cp deploy/harbor.env.example deploy/harbor.env   # robot token
-cp deploy/gpg.env.example deploy/gpg.env         # GPG_KEY=...
-cp deploy/vm.env.example deploy/vm.env           # optional PUBLIC_HOST
+cp deploy/harbor.env.example deploy/harbor.env   # optional, for image pulls
+bash scripts/vm/create-harbor-pull-secret.sh databases
+bash scripts/vm/bootstrap-databases.sh
+# passwords → deploy/.db.generated.env (or copy to deploy/db.env)
+```
 
-bash scripts/vm/verify-harbor-login.sh           # optional sanity check
+## Deploy / upgrade (Helm only)
+
+```bash
+cp deploy/gpg.env.example deploy/gpg.env
+cp deploy/vm.env.example deploy/vm.env           # PUBLIC_HOST, IMAGE_TAG
 bash scripts/vm/one-click-deploy.sh
 ```
 
+Or: `bash scripts/vm/deploy-spendsmart.sh`
+
 Open: `http://<PUBLIC_HOST>:30080`
 
-## Script layout
+## Scripts
 
 | Script | Role |
 |--------|------|
-| `scripts/vm/one-click-deploy.sh` | Full install |
-| `scripts/vm/install-k3s.sh` | k3s if missing |
-| `scripts/vm/bootstrap-databases.sh` | Postgres + ClickHouse in `databases` |
-| `scripts/vm/deploy-spendsmart.sh` | Secrets + Helm |
+| `scripts/vm/one-click-deploy.sh` | Helm deploy (checks cluster) |
+| `scripts/vm/deploy-spendsmart.sh` | Secrets + `helm upgrade --install` |
+| `scripts/vm/bootstrap-databases.sh` | Postgres + ClickHouse (one-time) |
 | `scripts/vm/create-harbor-pull-secret.sh` | `harbor-regcred` |
-| `scripts/load-deploy-env.sh` | Sources `deploy/*.env` |
 
-Chart: `charts/spendsmart` with **`-f values-vm.yaml`**.
+Chart: `charts/spendsmart` with `-f values-vm.yaml`.

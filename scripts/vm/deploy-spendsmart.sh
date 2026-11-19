@@ -21,8 +21,11 @@ if [[ -f "${ROOT}/deploy/.db.generated.env" ]]; then
   source "${ROOT}/deploy/.db.generated.env"
   set +a
 fi
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:?bootstrap-databases first}"
-CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:?bootstrap-databases first}"
+if [[ -z "${POSTGRES_PASSWORD:-}" || -z "${CLICKHOUSE_PASSWORD:-}" ]]; then
+  echo "Set POSTGRES_PASSWORD and CLICKHOUSE_PASSWORD in deploy/db.env" >&2
+  echo "Or run once: bash scripts/vm/bootstrap-databases.sh" >&2
+  exit 1
+fi
 
 PUBLIC_HOST="${PUBLIC_HOST:-}"
 if [[ -z "$PUBLIC_HOST" ]]; then
@@ -35,7 +38,6 @@ fi
 
 API_URL="http://${PUBLIC_HOST}:30081"
 KC_URL="http://${PUBLIC_HOST}:30083"
-CS_URL="http://${PUBLIC_HOST}:30082"
 
 command -v helm >/dev/null || {
   curl -fsSL https://get.helm.sh/helm-v3.17.3-linux-amd64.tar.gz -o /tmp/helm.tar.gz

@@ -1,23 +1,25 @@
-# SpendSmart — GCP single-VM deployment
+# SpendSmart — Helm on existing Kubernetes (GCP VM)
 
-Deploy SpendSmart on **one GCP VM** with **k3s**, in-cluster **Postgres** and **ClickHouse**, and the **Helm chart** in `charts/spendsmart`.
+Deploy on a server that **already has Kubernetes**. Databases are in-cluster (`kubernetes/vm/`); the app is installed via **Helm** only (no k3s installer).
 
-Quick start: see **[END_GOAL](END_GOAL)**.
+See **[END_GOAL](END_GOAL)**.
 
 ```bash
-cp deploy/harbor.env.example deploy/harbor.env
+# once: databases
+bash scripts/vm/bootstrap-databases.sh
+
+# app
 cp deploy/gpg.env.example deploy/gpg.env
 bash scripts/vm/one-click-deploy.sh
 ```
 
-## Repository layout
+## Layout
 
 | Path | Purpose |
 |------|---------|
-| `charts/spendsmart/` | Application Helm chart (+ `values-vm.yaml`) |
-| `kubernetes/vm/` | Database StatefulSets and app DB aliases |
-| `scripts/vm/` | Install and deploy scripts |
-| `deploy/*.env.example` | Local secrets (copy to gitignored `deploy/*.env`) |
+| `charts/spendsmart/` | Helm chart + `values-vm.yaml` |
+| `kubernetes/vm/` | DB StatefulSets and DB service aliases |
+| `scripts/vm/` | Bootstrap + Helm deploy |
 
 ## NodePorts
 

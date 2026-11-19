@@ -1,4 +1,4 @@
-# GCP single-VM profile (k3s). Use with:
+# GCP VM / existing cluster profile. Use with:
 #   helm upgrade --install spendsmart ./charts/spendsmart -f values.yaml -f values-vm.yaml -f deploy/generated-public-urls.yaml
 
 global:
