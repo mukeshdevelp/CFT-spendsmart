@@ -1,0 +1,28 @@
+# Apply DB auth secrets in namespace `databases` (before StatefulSets).
+# Generate passwords once, copy to deploy/values-a-file.yaml under vm.databases.*
+#
+#   kubectl create namespace databases --dry-run=client -o yaml | kubectl apply -f -
+#   envsubst < database-auth-values.example.yaml | kubectl apply -f -
+#   # or set POSTGRES_PASSWORD / CLICKHOUSE_PASSWORD in the shell and use bootstrap-databases.sh
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-auth
+  namespace: databases
+type: Opaque
+stringData:
+  username: dbadmin
+  password: REPLACE_POSTGRES_PASSWORD
+  database: cloudsentry
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: clickhouse-auth
+  namespace: databases
+type: Opaque
+stringData:
+  username: dba
+  password: REPLACE_CLICKHOUSE_PASSWORD
+  database: cost
