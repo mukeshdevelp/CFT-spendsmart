@@ -1,0 +1,128 @@
+# Helm values for SpendSmart on a single VM (client-a style + NodePorts).
+# Copy to deploy/values-a-file.yaml (gitignored), replace every REPLACE_* / YOUR_*.
+#
+#   kubectl apply -f kubernetes/vm/database-aliases.yaml
+#   helm upgrade --install spendsmart ./charts/spendsmart \
+#     -f charts/spendsmart/values.yaml \
+#     -f charts/spendsmart/values-vm.yaml \
+#     -f deploy/values-a-file.yaml
+# Or: bash scripts/vm/deploy-spendsmart.sh
+
+global:
+  publicHost: "YOUR_VM_IP_OR_DNS"
+
+vm:
+  createSecrets: true
+
+  harbor:
+    createPullSecret: true
+    server: harbor.ldc.opstree.dev
+    username: "robot$coe+YOUR_ROBOT"
+    password: "YOUR_HARBOR_TOKEN"
+
+  databases:
+    postgres:
+      host: postgres
+      port: "5432"
+      username: dbadmin
+      password: "REPLACE_POSTGRES_PASSWORD"
+      database: cloudsentry
+    clickhouse:
+      host: clickhouse
+      port: "8123"
+      username: dba
+      password: "REPLACE_CLICKHOUSE_PASSWORD"
+      database: cost
+      table: service_costs
+      tls: "false"
+
+  secrets:
+    gpgKey: "REPLACE_BACKEND_GPG_KEY"
+    geminiApiKey: "REPLACE_GEMINI_API_KEY"
+    keycloak:
+      adminUsername: admin
+      adminPassword: "REPLACE_KEYCLOAK_ADMIN_PASSWORD"
+    cloudsentry:
+      awsAccessKeyId: ""
+      awsSecretAccessKey: ""
+      awsDefaultRegion: gcp
+      publicBaseUrl: "http://YOUR_VM_IP_OR_DNS:30082"
+
+# --- Application (client-a); VM: no nodeSelectors, NodePorts from values-vm.yaml ---
+
+backend:
+  enabled: true
+  image:
+    repository: harbor.ldc.opstree.dev/coe/uniteconpro-backend-prod
+    tag: latest
+  service:
+    type: NodePort
+    nodePort: 30081
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+frontend:
+  enabled: true
+  image:
+    repository: harbor.ldc.opstree.dev/coe/uniteconpro-frontend-prod
+    tag: latest
+  service:
+    type: NodePort
+    nodePort: 30080
+  configMap:
+    name: uniteconpro-frontend
+    data:
+      VITE_API_BASE_URL: "http://YOUR_VM_IP_OR_DNS:30081"
+      VITE_CLOUD_SENTRY_API_BASE_URL: "http://YOUR_VM_IP_OR_DNS:30082"
+      VITE_KEYCLOAK_CLIENT_ID: spendsmart-frontend
+      VITE_KEYCLOAK_REALM: spendsmart
+      VITE_KEYCLOAK_URL: "http://YOUR_VM_IP_OR_DNS:30083"
+  nginx:
+    enabled: true
+    csp:
+      connectSrc:
+        - "'self'"
+        - "http://YOUR_VM_IP_OR_DNS:30081"
+        - "http://YOUR_VM_IP_OR_DNS:30082"
+        - "http://YOUR_VM_IP_OR_DNS:30083"
+        - "wss:"
+      frameSrc:
+        - "'self'"
+        - "http://YOUR_VM_IP_OR_DNS:30083"
+        - "https:"
+
+cloudsentry:
+  enabled: true
+  image:
+    repository: harbor.ldc.opstree.dev/coe/cloud-sentry-dev
+    tag: latest
+  service:
+    type: NodePort
+    nodePort: 30082
+
+engine:
+  enabled: true
+  image:
+    repository: harbor.ldc.opstree.dev/coe/uniteconpro-engine-dev
+    tag: latest
+  schedule: "5 11,23 * * *"
+  args:
+    - --mode
+    - refresh_days
+    - --cloud
+    - gcp
+    - --service
+    - all
+    - --days
+    - "2"
+
+keycloak:
+  enabled: true
+  service:
+    type: NodePort
+    nodePort: 30083

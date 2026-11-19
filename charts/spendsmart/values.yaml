@@ -190,6 +190,42 @@ cloudsentry:
       cpu: 500m
       memory: 512Mi
 
+# VM / single-file deploy: set createSecrets true in deploy/values-a-file.yaml
+vm:
+  createSecrets: false
+  harbor:
+    createPullSecret: false
+    server: ""
+    username: ""
+    password: ""
+  databases:
+    postgres:
+      host: postgres
+      port: "5432"
+      username: dbadmin
+      password: ""
+      database: cloudsentry
+    clickhouse:
+      host: clickhouse
+      port: "8123"
+      username: dba
+      password: ""
+      database: cost
+      table: service_costs
+      tls: "false"
+  secrets:
+    gpgKey: ""
+    geminiApiKey: ""
+    keycloak:
+      adminUsername: admin
+      adminPassword: ""
+    # Nested under secrets (see deploy/values-a-file.yaml.example)
+    cloudsentry:
+      awsAccessKeyId: ""
+      awsSecretAccessKey: ""
+      awsDefaultRegion: gcp
+      publicBaseUrl: ""
+
 keycloak:
   enabled: false
   fullnameOverride: keycloak
