@@ -1,0 +1,23 @@
+# DNS aliases so the app chart can use clickhouse/postgres as in-cluster service names.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spendsmart
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: spendsmart
+spec:
+  type: ExternalName
+  externalName: clickhouse.databases.svc.cluster.local
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: spendsmart
+spec:
+  type: ExternalName
+  externalName: postgres.databases.svc.cluster.local
